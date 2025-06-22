@@ -4,6 +4,24 @@ This holds the subset of scripts I've developed / collected / adapted over the y
 
 You are free to use them according to the [[https://www.gnu.org/licenses/agpl-3.0.en.html][Affero General Public License (AGPL)]].
 
+* Install
+
+This package abuses Python packaging.
+
+Install from git clone
+#+begin_example
+$ uv tool install .
+#+end_example
+
+Install from github
+#+begin_example
+uv tool install git+https://github.com/brettviren/menagerie
+#+end_example
+
+* Code organization
+
+Very little.
+
 Some scripts have personalized configuration information that requires you to hack them for them to be usable in your environment.
 
 The scripts are organized by implementation language:

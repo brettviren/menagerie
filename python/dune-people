@@ -6,13 +6,312 @@
 '''
 My interface to info about people.
 '''
-import mypyco                   # to munge sys.path
-import people
-
 import click
 
-# expand as more comes
-# cli = click.CommandCollection(sources=[people.dune.cli])
-cli = people.dune.cli
+import os
+import re
+import json
+import click
+import requests
+import functools
+import logging
+import lxml.html
+from pathlib import Path
+from http.cookiejar import LWPCookieJar as CookieJar
+
+import sys
+import click
+import functools
+from subprocess import check_output
+import logging
+from pathlib import Path
+
+default_datadir = Path(os.environ["HOME"]) / "sync/work/dune/colldb"
+default_html_cache = default_datadir / "colldb.html"
+default_cookie_file = default_datadir / "dune.cookies"
+default_colldb_url = "https://dbweb8.fnal.gov:8443/CollDb/dune/Users/index"
+default_login_url = "https://dbweb8.fnal.gov:8443/CollDb/dune/login_action"
+# default_login_url = "https://dbweb8.fnal.gov:8443/CollDb/dune/login"
+
+log = logging.getLogger('people')
+
+
+def get_pass(name):
+    '''
+    Attempt to return a password of name from pass.
+    '''
+    got = check_output(["pass", name])
+    return got.decode().split("\n")[0]
+
+
+# fixme: this should be a library module function
+def context(group_name, log_name=None):
+    '''
+    Return a click group context decorator.
+
+    To use, replace usual @click.group() with @context():
+    
+        from mypyco import context
+        @context("groupname", "logname")
+        def cli(ctx):
+            pass
+
+    If log_name is not given it defaults to group_name.
+
+    To get the logger object either use:
+
+        ctx.obj['log']
+
+    or:
+
+        log = logging.getLogger("logname")
+
+    '''
+    def decorator(func):
+        cmddef = dict(context_settings=dict(help_option_names=['-h', '--help']))
+
+        @click.group(group_name, **cmddef)
+        @click.option("-l", "--log-output", multiple=True,
+                      help="log to a file [default:stderr]")
+        @click.option("-L", "--log-level", default="info",
+                      help="set logging level [default:info]")
+        @click.pass_context
+        @functools.wraps(func)
+        def wrapper(ctx, log_output, log_level, *args, **kwds):
+            '''
+            My Python Code command
+            '''
+            nonlocal log_name
+            if not log_name:
+                log_name = group_name
+            log = logging.getLogger(log_name)
+            try:
+                level = int(log_level)      # try for number
+            except ValueError:
+                level = log_level.upper()   # else assume label
+            log.setLevel(level)
+
+            if not log_output:
+                log_output = ["stderr"]
+            for one in log_output:
+                # print(f'logger {log_name} at level {log_level} to {one}')
+                if one in ("stdout", "stderr"):
+                    hand = logging.StreamHandler(getattr(sys, one))
+                else:
+                    hand = logging.FileHandler(one)
+                hand.setLevel(level)
+                log.addHandler(hand)
+            ctx.obj = dict(log=log)
+            return
+        return wrapper
+    return decorator
+
+
+@context("people")
+def cli(ctx):
+    '''
+    DUNE People via DUNE CollDB slurpage.
+    '''
+    #print(cli.obj)
+    pass
+
+
+@cli.command("pass")
+@click.argument("name")
+def zx2c4(name):
+    '''
+    Run pass.
+    '''
+    print(get_pass(name))
+
+
+
+
+def dump_cookies(path, jar):
+    log.debug(f'{len(jar)} cookies in {path}:\n{jar}')
+
+
+def get_cookie_jar(path=default_cookie_file):
+    '''
+    Get a cookie jar
+    '''
+    path = Path(path)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True)
+
+    jar = CookieJar(path)
+    if path.exists():
+        jar.load()
+        log.debug('existing cookie jar')
+        dump_cookies(path, jar)
+    else:
+        jar.save()
+        log.debug('new cookie jar')
+        dump_cookies(path, jar)
+    return jar
+
+
+def get_cookie(jar, name='CollDb_session_id', default=None):
+    cs = {c.name: c for c in jar}
+    return cs.get(name, default)
+
+
+def webauth(username="bv", passname="gov/fnal/services"):
+    '''
+    A decorator to give a command webauth info.
+
+    If --login-url is given an auth'ed POST will refresh session cookies.
+
+    If --password is not given then --passname is used for zx2cf pass lookup.
+    '''
+    def decorator(func):
+        @click.option("--username", default=username, type=str,
+                      help="FNAL services username used to get cookie")
+        @click.option("--password", default=None, type=str,
+                      help="FNAL services password used to get cookie")
+        @click.option("--passname", default=passname,
+                      help="Name in pass for FNAL services password")
+        @click.option("--cookies", default=default_cookie_file,
+                      help="File to hold cookies")              
+        @click.option("--login/--no-login", default=False,
+                      help="The URL needing auth")
+        @click.option("--login-url", default=default_login_url,
+                      help="The URL needing auth")
+        @functools.wraps(func)
+        def wrapper(username, password, passname, cookies, login, login_url,
+                    *args, **kwds):
+            if not password:
+                password = get_pass(passname)
+            s = requests.Session()
+            s.cookies = get_cookie_jar(cookies)
+            log.debug(s.cookies)
+            cred = dict(username=username, password=password)
+            have_it = get_cookie(s.cookies)
+            if (not have_it or login) and login_url:
+                log.info(f'logging in to {login_url}')
+                got = s.post(login_url, data=cred)
+                log.debug(f'POST {login_url}: {got}')
+                have_it = get_cookie(s.cookies)
+                log.debug(f'got cookie: {have_it}')
+                s.cookies.save(ignore_discard=True)
+                have_it = get_cookie(s.cookies)
+                log.debug(f'save cookie: {have_it}')
+            kwds['session'] = s
+            return func(*args, **kwds)
+        return wrapper
+    return decorator
+
+@cli.command()
+@webauth()
+def cookie(session):
+    '''
+    Refresh cookie.
+    '''
+    # it's all in the @webauth decorator.
+
+@cli.command()
+@webauth()
+@click.option("--url", default=default_colldb_url,
+              help="DUNE CollDb URL")
+@click.option("--output", default=default_html_cache,
+              help="Path for HTML file to write")
+def slurp(session, url, output):
+    '''
+    Update the local HTML of DUNE CollDb web page
+    '''
+    res = session.get(url)
+    page = res.text
+
+    out = Path(output)
+    if not out.parent.exists():
+        out.parent.mkdir(parents=True)
+
+    if out.exists():
+        Path.rename(out, str(out.absolute()) + ".bak")
+    out.write_text(page)
+    
+def parse_colldb_html(path = default_html_cache):
+    '''
+    Return POD representation of CollDb HTML
+    '''
+    path = Path(path)
+    dom = lxml.html.document_fromstring(path.read_text())
+
+    rows = dom.get_element_by_id("members_list").find("tbody").findall("tr")
+    records = list()
+    for irown, row in enumerate(rows):
+        cols = row.findall("td")
+        rec = dict()
+
+        for col in cols:
+            ident = col.get("id")
+            if ident[-1] == '"':
+                ident = ident[:-1]
+
+            name,num = ident.split("_")
+            if name == "ln":
+                num = num[:-1]      # fscking garbage
+            rec["num"] = num
+
+            for span in col.findall("span"):
+                # span = col.find("span")
+                if span is None:
+                    # log.debug(f'no span for: {name},{num}')
+                    continue
+
+            # consistency?  Nah, who needs consistency!
+            if name in ("oi", "oic"):
+                span = span.find(f"span_{name}")
+                if span is None:
+                    # log.debug(f'No span_{name} for {ident}')
+                    continue
+
+            a = span.find("a")
+            if a is None:
+                text = span.text
+            else:
+                text = a.text
+                href = a.get("href")
+                if href:
+                    ident = href.split("?")[1]
+                    idt, idn = ident.split("=")
+                    rec[idt] = idn
+            if text and text.strip():
+                rec[name] = text.strip()
+
+        records.append(rec)
+    return records
+
+
+def jdumps(o):
+    return json.dumps(o, indent=4, ensure_ascii=False)
+
+
+@cli.command()
+@click.option("--html", default=default_html_cache,
+              help="Path to downloaded CollDB HTML file")
+@click.argument("queries", nargs=-1)
+def query(html, queries):
+    try:
+        records = parse_colldb_html(html)
+    except KeyError as err:
+        print(f'Failed to parse colldb: due to missing key "{err}" in {html}')
+        return 1
+
+    queries = [one.split("=") for one in queries]
+
+    results = list()
+    for rec in records:
+        for k, q in queries:
+            val = rec.get(k, "").lower()
+            if val == q.lower():
+                results.append(rec)
+                break
+            got = re.search(q,val, re.IGNORECASE)
+            if got:
+                results.append(rec)
+                break
+    print(jdumps(results))
+
 if __name__ == '__main__':
     cli()
