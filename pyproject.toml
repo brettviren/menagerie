@@ -1,7 +1,7 @@
 [project]
 name = "menagerie"
-version = "0.1.1"
-description = "Add your description here"
+version = "0.1.2"
+description = "My script menagerie"
 readme = {file = "README.org", content-type = "text/org"}
 authors = [
     { name = "Brett Viren", email = "brett.viren@gmail.com" }
@@ -14,12 +14,7 @@ dependencies = []
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
-# [tool.setuptools.packages.find]
-# where = ["bash", "python"] 
-# exclude = ["unsorted"]
-
 # This is a major abuse of Python packaging! 
-#[tool.setuptools.package-data]
 [tool.setuptools.data-files]
 bin = ["bash/*", "python/*"]
 
