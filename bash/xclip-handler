@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# A rofi to do stuff with things in the clipboard.
+
+mydir="$(dirname "$BASH_SOURCE")"
+
+menu_lines () {
+    cat <<EOF
+translate
+type
+EOF
+}
+
+typeit () {
+    xdotool type "$(xclip -selection primary -o)"
+}
+translateit () {
+    "$mydir/translate" xclip primary
+}
+
+got=$(menu_lines | rofi -dmenu)
+${got}it
+
+

@@ -1,0 +1,2 @@
+#!/bin/sh
+kitty +kitten icat --align left "$1"

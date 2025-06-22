@@ -1,0 +1,68 @@
+#!/bin/bash
+
+entr_watchdot () {
+
+    if [ ! -x /usr/bin/entr ] ; then
+        echo "need entr" 1>&2
+        exit 1
+    fi
+
+    name="$(basename "$1" .dot)"
+    # prime
+    dot -Tpdf -o "${name}.pdf" "${name}.dot"
+    mupdf "${name}.pdf"
+    echo "${name}.dot" | entr dot -Tpdf -o "${name}.pdf" "${name}.dot"
+}
+
+
+old_watchdot () {
+
+    unset ENV
+    unset BASH_ENV
+
+    if [ ! -x /usr/bin/iwatch ] ; then
+        echo "No iwatch, go fish"
+        echo "sudo apt install iwatch"
+        exit 1
+    fi
+
+    dot=$1 ; shift
+    if [ -z "$dot" ] ; then
+        echo "usage: watchdot file.dot" 1>&2
+        exit 1
+    fi
+
+    out=$1 ; shift
+    if [ -z "$out" ] ; then
+        ext=pdf
+        fullpath="$(readlink -f "$dot")"
+        dir="$(dirname "$fullpath")"
+        name="$(basename "$dot" .dot)"
+        out="${dir}/${name}.${ext}"
+    fi
+    #echo "OUT: $out"
+    ext="${out##*.}"
+
+    dotcmd=(dot -T"${ext}" -o "$out" "$dot")
+    #echo "DOT:" "$dotcmd"
+    if [ -f "$dot" ] ; then
+        # prime
+        "${dotcmd[@]}"
+    fi
+
+    if [ ! -f "$out" ] ; then
+        echo "initial dot failed"
+        exit 1
+    fi
+
+    if [ "$ext" = "pdf" ] ; then
+        evince "$out" >& /dev/null &
+        PID=$!
+        echo "started PID $PID"
+    fi
+
+    iwatch -e close_write -c "dot -T${ext} -o $out $dot" "$dot"
+
+    
+}
+old_watchdot "$@"

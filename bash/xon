@@ -1,0 +1,12 @@
+#!/bin/bash
+export DISPLAY=:0.0
+xset dpms force on
+sleep 1
+
+delay=7200
+
+xset dpms $delay $delay $delay
+xset s $delay $delay
+pulseaudio -k
+sleep 1
+pulseaudio -D

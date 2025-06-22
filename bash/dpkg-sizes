@@ -1,0 +1,2 @@
+#!/bin/bash
+dpkg-query -f '${Installed-Size} ${Package} ${Status}\n' -W | sort -n

@@ -1,0 +1,125 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["click","feedgenerator"]
+# ///
+import io
+import json
+import click
+import feedgenerator
+import time
+from datetime import datetime
+
+cmddef = dict(context_settings = dict(help_option_names=['-h', '--help']))
+@click.group(**cmddef)
+def cli():
+    '''Process back catalog youtube RSS feeds
+
+Generate a big JSON file for a channel given its "videos" URL
+
+    $ yt-dlp -J [URL] > [NAME].json
+
+This can take a rather long time.  Eg, a channel with 1k videos can take half an
+hour and produce about 500 MB of JSON.
+
+Once the JSON saved it may be converted to an RSS file:
+
+    $ yt-rss-feed json2rss -o [NAME].rss [NAME].json
+
+The RSS file wil be about 10x smaller than the JSON file.
+
+To incorporate a back catalog in Liferea:
+
+    1) Visit existing feed
+
+    2) Copy the "Source" URL, it likely looks like:
+       https://www.youtube.com/feeds/videos.xml?channel_id=<ID>
+
+    3) Run "yt-dlp" and "yt-rss-feed" as above.
+    
+    4) Right click on feed entry to get context menu.
+    Navigate: Properties->Source->Source Type
+    Select: Local File and Select File... to load the RSS file
+    Hit Okay button
+
+    5) Repeat but click URL instead of Local File and restore URL
+
+Note, duplicates are not detected.
+
+Alternatively, make a new subscription->Advanced->Local File, etc.
+
+    '''
+    pass
+
+def entries(jdat):
+    '''
+    Yield video entries
+    '''
+    if 'entries' in jdat:
+        for ent in jdat['entries']:
+            yield from entries(ent)
+    else:
+        yield jdat
+
+@cli.command("json2rss")
+@click.option("-o","--output",default="/dev/stdout",help="output RSS file")
+@click.argument('jfile')
+def json2rss(output, jfile):
+    '''
+    Convert "yt-dlp -J <URL>" output to RSS XML file.
+    '''
+    jdat = json.load(open(jfile))
+
+    feed_url_base = "https://www.youtube.com/feeds/videos.xml?channel_id="
+    video_url_base = 'https://www.youtube.com/watch?v='
+    feed = feedgenerator.Rss201rev2Feed(
+        title=jdat['channel'],
+        link=feed_url_base+jdat['channel_id'],
+        description=jdat['description'])
+    for item in entries(jdat):
+        video_url = video_url_base+item['id']
+        ts = item['upload_date']
+        ts = time.strptime(ts, '%Y%m%d')[:3]
+        ts = datetime(*ts)
+        desc = '''
+        <b>{description}</b> -- {channel}<p/>
+        <img src="{thumbnail}"/><p/>
+        viewed {view_count}, {duration} s ({live_status})<p/>
+        '''.format(**item)
+        chapters = item.get('chapters', [])
+        if chapters:
+            desc += 'Chapters:<ol>\n'
+            for chap in chapters:
+                st = chap['start_time']
+                et = chap['end_time']
+                d = chap['title']
+                desc += f'<li>{d} ({st} + {et-st})</li>\n'
+            desc += '</ol>\n'
+        formats = item.get('formats', [])
+        if formats:
+            desc += 'Formats:<ol>\n'
+            formats.reverse()
+            for fmt in formats:
+                if fmt.get('format_note','') in ('storyboard',):
+                    continue
+                u = fmt['url']
+                ft = fmt['format']
+                p = fmt['protocol']
+                e = fmt['ext']
+                desc += f'<li><a href="{u}">{ft}</a><p/>\n({p} {e})</li>\n'
+            desc += '</ol>\n'
+        feed.add_item(
+            title=item['fulltitle'],
+            link=video_url,
+            description=desc,
+            pubdate=ts)
+    
+    with open(output, 'w') as fp:
+        feed.write(fp, 'utf-8')
+
+def main():
+    cli(obj=None)
+
+
+if '__main__' == __name__:
+    main()

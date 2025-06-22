@@ -1,0 +1,182 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["pillow","xlib"]
+# ///
+'''
+Set X11 background.
+'''
+
+# oh, look: http://wiki.mate-desktop.org/docs:gsettings
+
+import os
+import sys
+from PIL import Image
+import random
+import time
+import subprocess
+import tempfile
+import socket
+from Xlib.display import Display
+
+hostname = socket.gethostname()
+print (hostname)
+
+def get_screen_size():
+    display = Display(os.environ.get("DISPLAY",":0.0"))
+    root = display.screen().root
+    w = root.get_geometry().width
+    h = root.get_geometry().height
+    return (w,h)
+screen_size = get_screen_size()
+#print (screen_size)
+
+def do_crop(image):
+    sw,sh = screen_size
+    sratio = float(sw)/float(sh)
+
+    iw,ih = image.size
+    iratio = float(iw)/float(ih)
+    #print sratio,iratio
+
+    if sratio > iratio:             # image is portrait
+        crop_width = iw
+        crop_height = int(iw/sratio)
+        x = 0
+        y = random.randint(0,ih-crop_height)
+        return image.crop((x,y,x+crop_width,y+crop_height)).resize((sw,sh))
+
+    elif sratio < iratio:         # image is landscape
+        crop_width = int(ih*sratio)
+        crop_height = ih
+        x = random.randint(0,iw-crop_width)
+        y = 0
+        return image.crop((x,y,x+crop_width,y+crop_height)).resize((sw,sh))
+
+    return image.resize((sw,sh))
+
+
+def shape_background(infile, outfile):
+    '''
+    Take infile and optimally shape it to fit the root window saving
+    it to outfile.
+    '''
+    with open(infile, 'rb') as infp:
+        image  = Image.open(infp)
+        crop = do_crop(image)
+        crop.save(outfile,quality=95)
+
+        del(crop)
+        del(image)
+    return
+
+def set_background_gsettings_mate(fname):
+    cmd = ['gsettings', 'set', 'org.mate.background',
+           'picture-filename', fname]
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_gsettings_gnome(fname):
+    cmd = ['gsettings', 'set', 'org.gnome.desktop.background',
+           'picture-uri', 'file://'+fname]
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_gconftool2(fname):
+    cmd = ['gconftool-2', '-t', 'str', '-s', '/desktop/gnome/background/picture_filename ', fname]
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_mateconftool2(fname):
+    cmd = ['mateconftool-2', '-t', 'string', '-s', '/desktop/mate/background/picture_filename', fname]
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_lxde(fname):
+    cmd = ['pcmanfm', '-w', fname, '--wallpaper-mode=stretch']
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_x11(fname):
+    cmd = ['xloadimage', '-onroot', fname]
+    output = subprocess.check_output(cmd)
+    return
+
+def set_background_dconf_gnome(fname):
+    cmd = ['dconf', 'write', '/org/gnome/desktop/background/picture-uri', 'file://' + fname]
+    #print (dconf)
+    output = subprocess.check_call(cmd)
+    return
+
+def set_background_dconf_mate(fname):
+    cmd = ['dconf', 'write', '/org/mate/desktop/background/picture-filename', '"%s"' % fname]
+    #print (dconf)
+    output = subprocess.check_call(cmd)
+    return
+    
+try:
+    set_background = dict(heather=set_background_gsettings_mate,
+                          haiku=set_background_dconf_mate,
+                          hokum=set_background_dconf_mate,
+                          hal=set_background_x11,
+                          hal_mate=set_background_gsettings_mate)[hostname]
+except KeyError:
+    set_background = set_background_x11
+
+#set_background = set_background_dconf
+#set_background = set_background_gconftool2
+#set_background = set_background_gsettings_mate
+#set_background = set_background_lxde
+
+
+def get_file(dname):
+    picdir = os.path.expandvars(dname)
+    for path,subdir,files in os.walk(picdir):
+        touse = list()
+        for f in files:
+            ext = os.path.splitext(f)[1]
+            if ext.lower() in ['.png','.jpg','.jpeg']:
+                touse.append(f)
+        files = touse
+        while True:
+            fname = random.choice(files)
+            if fname[0] != '.':
+                fname = os.path.join(path,fname)
+                if os.path.exists(fname):
+                    return fname
+            continue
+        continue
+    print ('No files found in "%s"' % picdir)
+    return None
+
+
+def cycle(dname, delay):
+    '''
+    Cycle through files in given directory and display them for given delay
+    '''
+    while True:
+        infile = get_file(dname)
+        orig,ext = os.path.splitext(infile)
+        fp,outfile = tempfile.mkstemp(ext)
+        try:
+            shape_background(infile,outfile)
+        except Exception as msg:
+            print ("failed to shape pic: %s" % infile)
+            continue
+        set_background(outfile)
+        time.sleep(delay)
+        if os.path.exists(outfile):
+            os.close(fp)        # without this it will leak open files
+            os.remove(outfile)
+        continue
+    return
+
+if __name__ == '__main__':
+    try:
+        dname = sys.argv[1]
+    except IndexError:
+        dname = "$HOME/Desktop/bkg"
+
+    cycle(dname,300)
+ 
+

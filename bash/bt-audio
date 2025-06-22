@@ -1,0 +1,25 @@
+#!/bin/bash
+
+action=connect
+if [ "$#" -gt 1 ] ; then
+    action="$1"
+    shift
+fi
+
+if [ -n "$1" ] ; then
+    ident=$(bluetoothctl devices | grep -i "$@" | awk '{print $2}')
+    if [ -n "$ident" ] ; then
+        echo "attempting to $action $ident"
+        bluetoothctl $action "$ident"
+        exit 0
+    fi
+fi
+bluetoothctl devices
+cat <<EOF
+
+To pair a new device, run bluetoothctl then
+  scan on
+  pair <id>
+  connect <id>
+EOF
+

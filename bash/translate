@@ -1,0 +1,146 @@
+#!/bin/bash
+
+usage () {
+    cat <<EOF >&2
+translate - from Japanese to English and make Anki cards
+
+  $ translate ねこでしょう
+  $ echo ねこでしょう | translate
+  $ translate xclip [primary|secondary|clipbard]
+
+This will query google translate with the Japanese text to get English text and
+Japanese voice.  Results are displayed in a zenity window.  Hitting Esc closes
+the window.  Htting Enter will save the rests as an Anki card.
+
+The special "xclip" argument will instruct to use xclip to get the text.  An optional X11 selection type can be given. 
+
+See also xclip-handler as a way to call translate via a selection.
+
+This requires:
+
+ - "uv" to run stuff including
+   - trrc https://github.com/Constantin1489/trrc/tree/master
+ - "apt install translate-shell" for "trans"
+ - "apt install zenity" for "zenity"
+ - anki with anki-connect and set up according to the ANKI_* vars.
+
+If you are not me, read this scripts, check and set the ANKI_* variables to
+match your preferences.
+
+EOF
+    exit 1
+}
+
+if [ -z "$1" ] ; then
+    usage
+fi
+use_xclip=""
+if [ "$1" = "xclip" ] ; then
+    shift
+    use_xclip="primary"
+    if [ "$1" ] ; then
+        use_xclip="$1";
+        shift
+    fi
+fi
+
+
+if [ ! -x "$(which uv)" ] ; then
+    uv-upgrade > /dev/null 1>&2
+fi
+if [ ! -x /usr/bin/zenity ] ; then
+    echo "Install zenity:" >&2
+    sudo apt-get install zenity
+fi
+if [ ! -x /usr/bin/trans ] ; then
+    echo "Install translate-shell:" >&2
+    sudo apt-get install translate-shell
+fi
+
+
+# set -x
+
+# These variables have no special meaning outside of this script
+ANKI_MEDIA_FOLDER="${ANKI_MEDIA_FOLDER:-$HOME/.local/share/Anki2/BV/collection.media}"
+# Must exist.  Call it whatever you like. 
+ANKI_DECK="${ANKI_DECK:-Captured}"
+# The card type, must exist.  Human Japanese (HJ) provides a good one
+ANKI_CARD="${ANKI_CARD:-HJ}"
+# Must match the card type.  Here is HJ's, not last one is an intentional typo...
+ANKI_FIELDS="${ANKI_FIELDS:-Meaning:Kana:Pronounciation}" # [sic]
+
+
+capture () {
+    local tmpdir="$1"
+    readarray -t lines < "$tmpdir/t.txt" 
+
+    local afile="${lines[0]}.mp3"
+    local apath="$ANKI_MEDIA_FOLDER/$afile"
+
+    # This must match the data string and the ANKI_CARD.
+    # Note, we match HJ's misspelling of "Pronunciation".
+    local fields="Meaning:Kana:Pronounciation" # [sic]
+
+    uvx trrc \
+        --deck "$ANKI_DECK" \
+        --type "$ANKI_CARD" \
+        --field "$ANKI_FIELDS" \
+        --IFS '\t' \
+        "${lines[3]}\t${lines[0]}\t[sound:$afile]" > $tmpdir/trrc.log 2>&1
+
+    # trrc does not return error code
+    # if [ $got -ne 0 ] ; then
+    #     echo "trrc failed to make card, leaving: $tmpdir" 1>&2
+    #     return
+    # fi
+    if grep -q 'Error' $tmpdir/trrc.log ; then
+        echo "trrc failed to make card, leaving: $tmpdir" 1>&2
+        return
+    fi
+
+    if [ -f "$apath" ] ; then
+        echo "Sound file exists: $afile"
+    else
+        cp "$tmpdir/t.mp3" "$apath"
+        echo "Imported sound file: $afile"
+    fi
+    rm -r "$tmpdir"
+}
+
+
+doit () {
+    tmpdir="$(mktemp --tmpdir -d translate-XXXXXX)"
+
+    local service=google
+    # local service=lingva # forbidden
+    # local service=bing # no TTS
+    # local service=yandex # no JA
+    # local results="$(crow -e "$service" -u "$@")"
+    trans -e google \
+          -show-languages no \
+          -show-prompt-message no \
+          -show-translation-phonetics no \
+          -show-dictionary no \
+          -show-alternatives=no \
+          -speak \
+          -download-audio-as "$tmpdir/t.mp3" \
+          -o "$tmpdir/t.ans" "$@"
+    # remove ansi boldness and color codes
+    sed -E 's/\x1b\[[0-9;]*m//g' < "$tmpdir/t.ans"  > "$tmpdir/t.txt"
+
+    zenity --question --ok-label="capture [enter]" --cancel-label="close [esc]"  --no-wrap --title "$@" --text "$(cat $tmpdir/t.txt)"
+    local got=$?
+    if [ $got -eq 0 ] ; then
+        capture "$tmpdir"
+    else
+        rm -r $tmpdir
+    fi       
+}
+
+if [ -n "$use_xclip" ] ; then
+    doit "$(xclip -selection $use_xclip -o)"
+else
+    doit "$@"
+fi
+
+

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Attempt provide Kate's idot
+# https://twitter.com/thingskatedid/status/1316074032379248640
+
+if [ -n "$1" ] ; then
+    infile="$1" ; shift
+else
+    infile=/dev/stdin
+fi
+
+if [ ! -x "$(which dot)" ] ; then
+    echo "No graphviz, installing:" >&2
+    sudo apt-get install graphviz
+fi
+
+dot -Gbgcolor=black -Gcolor=green -Gfontcolor=green -Ncolor=green -Nfontcolor=green -Ecolor=green -Efontcolor=green -Tpng "$infile" | kitty +kitten icat --align=left 

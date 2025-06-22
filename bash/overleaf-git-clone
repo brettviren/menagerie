@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# set -x
+
+# The damn git url for overleaf docs always confounds me so I ensconce
+# it here.  Call this with the overleaf hash.
+
+#hash="$1" ; shift
+## accept also the web URL
+hash="$(echo "$1" | sed 's,https://www.overleaf.com/project/\([^/]*\)[/?].*,\1,g')"
+name="$2"
+if [ -z "$name" ] ; then
+    echo "usage: $0 <overleaf-hash> <directory>"
+    exit 1
+fi
+
+if [ -e "$name" ] ; then
+    echo "target exists: $name"
+    exit 1
+fi
+
+olpass="$(pass com/overleaf | head -1)"
+oluser="$(pass com/overleaf | grep 'username:' | awk '{print $2}')"
+
+olurl="https://git.overleaf.com/$hash"
+echo "$olurl"
+
+mkdir "$name"
+cd "$name" || exit 1
+git init || exit 1
+
+git remote add origin "$olurl" || exit 1
+git config user.name "$oluser" || exit 1
+git config user.password "$olpass" || exit 1
+git config credential.helper store || exit 1
+git fetch origin || exit 1
+git checkout -t -b master origin/master || exit 1
+git pull || exit 1
+
+# When editing locally, cruft is certain and we don't want to
+# accidentally expose this to collaborators using Overleaf web.
+if [ ! -d .gitignore ] ; then
+    cat <<EOF >> .gitignore
+latexmk-out
+auto
+*~
+main.pdf
+EOF
+fi
+

@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# shellcheck disable=SC1091
+source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/helpme.sh"
+
+
+# promnesia-control [-h|--help|help] | [cmds [options]]
+#
+# A wrapper around promnesia.
+
+
+share="$(helpme_basedir data)/promnesia"
+if [[ -z "$share" ]] ; then die "no share dir" ; fi
+mylog="$share/promnesia-control.log"
+mypid="$share/promnesia-control.pid"
+
+# enter the run time directory and environment 
+enter_env () {
+    # echo "share is $share"
+    if [[ ! -d "$share/.direnv/" ]] ; then
+        die "promnesia environment not set up.  Try: $0 init"
+    fi
+    cd "$share" || die "no such directory: $share"
+    eval "$(direnv export bash)"
+    direnv allow
+}
+
+
+# init 
+#
+# Do initial setup or update existing promnesia install.  Files are
+# located according to XDG conventions.
+cmd_init () {
+    # fixme, add --update option
+    mkdir -p "$share"
+    cd "$share" || die "failed to cd $share"
+    echo layout python > ".envrc"
+    eval "$(direnv export bash 2>/dev/null)" || die "failed to setup direnv"
+    direnv allow || die "failed to direnv allow"
+    pip install promnesia orgparse mistletoe python-magic bs4 lxml || die "failed to pip install promnesia"
+    pip install git+https://github.com/karlicoss/rexport || die "failed to pip install rexport"
+}
+
+        
+# index 
+#
+# Run promnesia index
+cmd_index () {
+    enter_env
+
+    local mydata, mycfg rnow
+    mydata="$(helpme_basedir data)/my"
+    mycfg="$(helpme_basedir config)/my"
+    #echo "mycfg is $mycfg, mydata is $mydata"
+
+    mkdir -p "$mydata/reddit"
+    rnow="$mydata/reddit/rexport-$(date -I).json"
+
+    python -m rexport.export --secrets "$mycfg/reddit-secrets.py" > "$rnow"
+
+    local rpro="$mydata/reddit/rexport"
+    ln -sf "$rnow" "$rpro"
+    
+    promnesia index
+}
+
+
+# serve 
+#
+# Start promnesia server.  Does not background.
+cmd_serve () {
+    # fixme: check for running server, implement kill, use pid file, trap
+    enter_env > $mylog 2>&1
+
+    log="$share/promnesia-serve-$(date -I).log"
+    promnesia serve > $log 2>&1 
+}
+
+
+# start 
+#
+# Start promnesia in the background
+cmd_start () {
+    if [ -f "$mypid" ] ; then
+        cat "$mypid"
+        return
+    fi
+
+    enter_env > $mylog 2>&1
+
+    log="$share/promnesia-serve-$(date -I).log"
+    promnesia serve > $log 2>&1 &
+    local pid="$!"
+    echo "$pid" > "$mypid"
+    disown "$pid"
+    echo "$pid"
+}
+
+
+# stop 
+#
+# Stop the running promnesia 
+cmd_stop () {
+    if [ ! -f "$mypid" ] ; then
+        echo "promnesia PID file does not exists: $mypid"
+        exit 1
+    fi
+
+    local pid="$(cat "$mypid")"
+    if /usr/bin/ps -q "$pid" > /dev/null; then
+        kill "$pid"
+    else
+        echo "PID $pid was not running"
+    fi
+    rm "$mypid"
+}
+
+
+# status 
+#
+# Echo status about promnesia
+cmd_status () {
+    if [ ! -f "$mypid" ] ; then
+        echo "promnesia PID file does not exists: $mypid"
+        local pid=$(ps -ef|grep 'promnesia serve'|grep -v grep|awk '{print $2}')
+        if [ -n "$pid" ] ; then
+            echo "promesia appears to be running as $pid"
+        fi
+        return
+    fi
+
+    local pid="$(cat "$mypid")"
+
+    if /usr/bin/ps -q "$pid" > /dev/null; then
+        echo "promnesia running with PID $pid"
+    else
+        echo "promnesia stopped with stale $mypid"
+    fi
+}
+    
+
+# log 
+#
+# Page log
+cmd_log ()
+{
+    local pager="${PAGER:-less}"
+    local thelog="$(ls -t "$share"/promnesia-serve-*.log | head -1)"
+    "$pager" "$thelog"
+}
+
+
+# browser 
+#
+# Backup browser history
+cmd_browser ()
+{
+    local mydir=~/sync/bookmarks
+
+    enter_env > $mylog 2>&1
+
+    # fixme: handle list of browser profiles better
+    for profile in 6vk2fg0d.brett kujnw0k7.ffprofile
+    do
+        local one="$mydir/$profile"
+        mkdir -p "$one"
+        echo "$one"
+        browserexport save -b firefox --profile "$profile" --to "$one"
+    done
+}
+
+helpme "${BASH_SOURCE[0]}" "$@"
+

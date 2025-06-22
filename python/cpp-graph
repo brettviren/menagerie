@@ -1,0 +1,1093 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["networkx", "pygraphviz", "click", "clang==14"]
+# ///
+
+# Make various types of graphs from C++ translation unit source.
+
+### You may need to wrangle:
+# $ sudo apt install python3-clang libclang-14-dev python3-pygraphviz graphviz libgraphviz-dev
+### If needed, remove the python clang in UV's cache for this script
+# $ rm -rf ~/.cache/uv/environments-v2/cpp-graph*
+
+# Development note.  This script began to take shape with assitance of gemini
+# flash and claude sonnet.  They proved to be largely worthless for direct
+# development.  The only value-add was to inefficiently teach me how to use
+# libclang Python bindings by attempting to fix their numerous errors.  They
+# were not able to fully understand libclang representation of the C++ AST and
+# which lead to a broken interpretation toward providing the goal.  In the end,
+# I needed to provide an unfiltered AST -> GraphViz ast_graph() dumper so that I
+# myself could learn this representation and then write an appropriate AST
+# filter.  Perhaps arming the LLMs with this info would have led to a different
+# story.
+
+import sys
+import click
+import subprocess
+from pathlib import Path
+import clang
+import clang.cindex
+from clang.cindex import CursorKind, TokenKind
+import networkx as nx
+from collections import defaultdict
+
+# Function-like kinds.
+function_kinds = (CursorKind.CXX_METHOD,
+                  CursorKind.FUNCTION_DECL,
+                  CursorKind.CONSTRUCTOR)
+
+# fixme: make this more portable
+clang.cindex.Config.set_library_path("/usr/lib/llvm-14/lib")
+
+def debug(message, *args, **kwargs):
+    return click.echo(message, err=True, *args, **kwargs)
+
+def cpp_index(cpp_file, *args):
+    '''
+    Return a translation unit.
+    '''
+    index = clang.cindex.Index.create()
+    args = ['-x', 'c++', '-std=c++17', '-I./inc'] + list(args)
+    tu = index.parse(cpp_file, args=args, options=0)
+    if tu.diagnostics:
+        sys.stderr.write("Parsing diagnostics:\n")
+        for diag in tu.diagnostics:
+            sys.stderr.write(f"  {diag}\n")
+
+    return tu
+    
+
+def find_namespace(ns_name, cursor):
+    '''
+    Find the namespace.
+    '''
+    path = ns_name.split("::")
+    for cur in cursor.get_children():
+        if cur.kind != CursorKind.NAMESPACE:
+            continue
+        if cur.spelling != path[0]:
+            continue
+        if len(path) == 1:
+            return cur
+        return find_namespace("::".join(parts[1:]), cur)
+    
+    raise ValueError(f'No namespace: "{ns_name}"')
+
+
+def find_class(class_name, cursor):
+    '''
+    Find class declaration in a namespace (or top).
+    '''
+    for cur in cursor.get_children():
+        if cur.kind == CursorKind.CLASS_DECL and cur.spelling == class_name:
+            return cur
+    raise ValueError(f'No class: "{class_name}"')
+    
+
+def class_members(class_cursor):
+    '''
+    Return tuple (functions, variables) each a list of cursors to class members.
+    '''
+    functions = list()
+    variables = list()
+    for cur in class_cursor.get_children():
+        if cur.kind == CursorKind.FIELD_DECL:
+            # debug(f'variable of {class_cursor.spelling}: "{cur.spelling}"')
+            variables.append(cur)
+            continue
+        if cur.kind == CursorKind.CXX_METHOD:
+            # debug(f'function of {class_cursor.spelling}: "{cur.spelling}"')
+            functions.append(cur)
+            continue
+    return (functions, variables)
+
+def read_write(descendant, parent):
+
+    referenced_decl = cursor.referenced # The actual declaration of the member variable
+
+
+    # Determine access type (read/write/access)
+    is_written = False
+    is_read = False
+
+    debug(f'READ_WRITE {descendant.spelling} {descendant.kind.name}')
+
+    parent = descendant.semantic_parent
+    if not parent:
+        debug(f'READ_WRITE no parent')
+        return (is_read, is_written)
+    debug(f'READ_WRITE {descendant.spelling} {parent.spelling}')
+
+
+    # Check if the member reference is on the left-hand side of an assignment
+    if parent.kind == CursorKind.BINARY_OPERATOR:
+        if parent.opcode == TokenKind.EQUAL and descendant == list(parent.get_children())[0]:
+            is_written = True
+
+        if parent.is_compound_assignment_operator():
+            is_written = True
+            is_read = True
+
+    # Check if it's used in any other expression (implies read)
+    # if not is_written:
+    #     # Iterate through siblings or parents to see if it's used in an expression
+    #     # This is a simplified check; a more robust solution might involve data flow analysis
+    #     for usage_context in descendant.walk_preorder():
+    #         if usage_context.kind in [
+    #             clang.cindex.CursorKind.DECL_REF_EXPR,
+    #             clang.cindex.CursorKind.CALL_EXPR,
+    #             clang.cindex.CursorKind.BINARY_OPERATOR,
+    #             clang.cindex.CursorKind.UNARY_OPERATOR,
+    #             clang.cindex.CursorKind.RETURN_STMT,
+    #         ] and usage_context != descendant:
+    #             is_read = True
+    return (is_read, is_written)
+
+
+
+def cur2str(cur):
+    name = fqdn(cur)
+    return f'{cur.location.file}:[{cur.location.line},{cur.location.column}]:\t{cur.kind.name}\t{name}'
+
+def dump(cursor, depth=0):
+    pad = '  '*(depth+1)
+    cs = cur2str(cursor)
+    for cur in cursor.get_children():
+        dump(cur, depth+1)
+
+def dump2(cursor):
+    for cur in cursor.walk_preorder():
+        print(vertex_data(cur))
+
+def save_graph_to_dot(graph, filename="/dev/stdout"):
+    """
+    Saves a networkx graph to GraphViz dot format.
+
+    Args:
+        graph (networkx.DiGraph): The graph to save.
+        filename (str): The name of the output dot file.
+    """
+    if filename.endswith(".dot") or filename in ("/dev/stdout", ""):
+        dot_file = Path(filename)
+        postproc = False
+    else:
+        ext = Path(filename).suffix
+        dot_file = Path(filename.replace(ext, '.dot'))
+        postproc = True
+
+    debug(f'Writing: graph to {dot_file}')
+
+    agraph = nx.nx_agraph.to_agraph(graph)
+    text = agraph.to_string()
+    dot_file.write_text(text)
+
+    if postproc:
+        dot_cmd = 'dot -T %s -o "%s" "%s"' % (ext[1:], filename, dot_file)
+        debug(f'Running: {dot_cmd}')
+        subprocess.run(dot_cmd, shell=True)
+
+    
+
+
+
+
+def lexical_path(cursor):
+    '''
+    Return list starting with cursor followed by each lexical parent. 
+    '''
+    if not cursor.lexical_parent:
+        return [cursor]
+    return [cursor] + lexical_path(cursor.lexical_parent)
+
+def semantic_path(cursor):
+    '''
+    Return list starting with cursor followed by each semantic parent. 
+    '''
+    if not cursor:
+        return []
+    if not cursor.semantic_parent:
+        return [cursor]
+    return [cursor] + semantic_path(cursor.semantic_parent)
+
+
+def fqdn(cursor):
+    lp = semantic_path(cursor)
+    lp.reverse()
+    spellings = [c.spelling for c in lp]
+    spellings[0] += f'[{cursor.location.line},{cursor.location.column}]'
+    return "::".join(spellings)
+
+def vertex_ident(cursor):
+    '''
+    Graph vertex identity of a cursor (C++ mangled name).
+    '''
+    lp = semantic_path(cursor)
+    lp.reverse()
+    ident = '_'.join([c.spelling for c in lp])
+    ident = ident.replace('/', '_').replace(':', '_').replace('.', '_')
+
+    ## This can be empty or none
+    # ident = cursor.mangled_name
+    # debug(f'vertex {type(ident)} {ident}')
+
+    # if not ident:
+    #     ref = cursor.referenced
+    #     if ref:
+    #         raise ValueError(f'empty vertex ident for {cursor.spelling}{[cursor.kind.name]} ref:{ref.spelling}{[ref.kind.name]}')
+    #     else:
+    #         raise ValueError(f'empty vertex ident for {cursor.spelling}{[cursor.kind.name]}')
+    ### deal with it at graph construction time
+
+    return ident
+
+def vertex_data(cursor, label = None):
+    '''
+    Return basic graph vertex data for all cursor types.
+    '''
+    ident = vertex_ident(cursor)
+    lp = semantic_path(cursor)
+    lp.reverse()
+
+    kind = cursor.kind.name
+
+    d = dict(ident=ident, kind=kind, spelling=cursor.spelling)
+
+    d['namespace']=""
+    if len(lp) > 2:
+        d['namespace'] = "::".join([p.spelling for p in lp[1:-1]])
+
+    d['file'] = ""
+    d['line'] = 0
+    if cursor.location.file:
+        d['file'] = cursor.location.file
+        d['line'] = cursor.location.line
+    d['cpptype'] = ""
+    if cursor.kind in list(function_kinds) + [CursorKind.FIELD_DECL]:
+        d['cpptype'] = cursor.type.spelling
+
+    if label is None:
+        label = r'{spelling}\n{cpptype}\n\n{namespace}\n{file}:{line}'
+    d['label'] = label.format(**d)
+
+    if cursor.kind in function_kinds:
+        d['shape'] = "box"
+    elif cursor.kind in (CursorKind.CLASS_DECL,):
+        d['shape'] = 'folder'
+    elif cursor.kind in (CursorKind.NAMESPACE,):
+        d['shape'] = 'octagon'
+    elif cursor.kind in (CursorKind.FIELD_DECL,):
+        d['shape'] = 'ellipse'
+
+
+    return d
+                
+
+def get_classes(cursor):
+    '''
+    Return all class declaration cursors.
+    '''
+    found = list()
+    for cur in cursor.walk_preorder():
+        if cur.kind == CursorKind.CLASS_DECL:
+            found.append(cur)
+    return found
+
+
+def ast_graph_ident(cur):
+    #key = fqdn(cur)
+    ident = f'{cur.spelling} {cur.kind.name} {cur.location.file} {cur.location.line}'
+    if not ident.strip():
+        return "empty"
+    ident = ident.replace(":","_").replace(".","_")
+    return ident
+
+def ast_graph_label(cur):
+    label = rf'{cur.spelling}\n{cur.kind.name}\n{cur.location.file}{cur.location.line}'
+    return label.replace("<","&lt;").replace(">","&gt;")
+
+def ast_graph_data(cur):
+    return dict(ident = ast_graph_ident(cur),
+                label = ast_graph_label(cur))
+
+def get_file(cur):
+    if cur.location.file:
+        return str(cur.location.file)
+    if cur.kind == CursorKind.TRANSLATION_UNIT:
+        return cur.spelling
+    return None
+
+def ast_graph(graph, cursor, parent):
+
+    if get_file(parent) != get_file(cursor):
+        # debug(f'{parent.spelling}[{parent.kind.name}]:{parent.location.file}')
+        # debug(f'{cursor.spelling}[{cursor.kind.name}]:{cursor.location.file}\n')
+        return
+
+    cd = ast_graph_data(cursor)
+    ref = cursor.referenced
+
+    if cursor.kind in function_kinds:
+        cd['shape'] = 'box'
+    elif cursor.kind in (CursorKind.CLASS_DECL,):
+        cd['shape'] = 'folder'
+    elif cursor.kind in (CursorKind.NAMESPACE,):
+        cd['shape'] = 'octagon'
+    elif cursor.kind in (CursorKind.FIELD_DECL,):
+        cd['shape'] = 'diamond'
+    elif cursor.kind in (CursorKind.MEMBER_REF_EXPR,):
+        if not ref:
+            # debug(f'no ref for:{cursor.spelling}[{cursor.kind.name}]') 
+            return
+        if ref.kind in (CursorKind.CXX_METHOD,):
+            cd['shape'] = 'box'
+            cd['color'] = 'purple'
+        if ref.kind in (CursorKind.FUNCTION_DECL,):
+            cd['shape'] = 'box'
+            cd['color'] = 'blue'
+        else:
+            cd['shape'] = 'ellipse'
+            cd['color'] = 'red'
+    elif cursor.kind in (CursorKind.CALL_EXPR,):
+        cd['shape'] = 'box'
+        cd['color'] = 'red'
+
+    pd = ast_graph_data(parent)
+    graph.add_node(cd['ident'], **cd)
+    if pd['ident'] != cd['ident']:
+        graph.add_edge(pd['ident'], cd['ident'], label="child")
+
+    if ref:
+        rd = ast_graph_data(ref)
+        if rd['ident'] != cd['ident']:
+            graph.add_edge(rd['ident'], cd['ident'], label="ref", color="gray")
+
+    for child in cursor.get_children():
+        ast_graph(graph, child, cursor)
+
+
+def ast_ana(path):
+    """
+    Recursively analyzes the AST in a depth-first visit with path giving the
+    current AST path.
+
+    The path must have at least one entry.
+
+    Return a list of tuple, each tuple holding an ordered pair of cursors pairs
+    and an association / edge type string.
+    """
+    result = list()
+
+    # Get the trivial case done.
+    if len(path) == 1:
+        for child in path[0].get_children():
+            result += ast_ana(path + [child])
+        return result
+
+    parent = path[-2]
+    cursor = path[-1]
+
+    # debug(f'AST ANA: [{len(path)}/{len(list(cursor.get_children()))}] cursor:{cursor.spelling}[{cursor.kind.name}] parent:{parent.spelling}[{parent.kind.name}]')
+
+
+    if cursor.kind == CursorKind.FIELD_DECL: # variable
+        result.append((parent, cursor, "VARIABLE"))
+
+    elif cursor.kind in (CursorKind.CXX_METHOD, CursorKind.CONSTRUCTOR):
+        result.append((parent, cursor, "METHOD"))
+
+    elif cursor.kind == CursorKind.FUNCTION_DECL:
+        result.append((parent, cursor, "FUNCTION"))
+
+    elif cursor.kind == CursorKind.CALL_EXPR:
+        result += ast_ana_call_expr(path)
+
+    elif cursor.kind in (CursorKind.MEMBER_REF_EXPR, ):
+        result += ast_ana_ref_expr(path)
+    #### this suffers from some misunderstanding....
+    # elif cursor.kind in (CursorKind.DECL_REF_EXPR,):
+    #     result += ast_ana_decl_ref_expr(path)
+    else:
+        ## this makes a HUGE noise for any moderately complicated code but it shows what we are missing.
+        # debug(f'AST ANA: falling through [{len(path)}] cursor:{cursor.spelling}[{cursor.kind.name}] parent:{parent.spelling}[{parent.kind.name}]')
+        pass
+        
+    # what else?
+
+    for child in cursor.get_children():
+        result += ast_ana(path + [child])
+    return result
+
+def ast_ana_call_expr(path):
+    cur = path[-1]
+    if cur.kind == CursorKind.TRANSLATION_UNIT:
+        debug(f'CALL_EXPR: got tu: {cur.spelling}[{cur.kind.name}]')
+        return []
+
+    ref = cur.referenced
+    if not ref:
+        if cur.spelling:        # ignore anon
+            debug(f'CALL_EXPR: no ref for {cur.spelling}[{cur.kind.name}]')
+        return []
+
+    try:
+        myfunc = ast_ana_find_func(path)
+    except ValueError:
+        return []
+
+    return [ (myfunc, ref, "CALL") ]
+
+            
+def ast_ana_var_op(path):
+    parent = path[-2]
+    cursor = path[-1]
+    ref = cursor.referenced
+
+    try:
+        myfunc = ast_ana_find_func(path)
+    except ValueError:
+        return []
+
+    if ref.type.is_const_qualified():
+        # debug(f'IGNORE CONST OP: myfunc:{myfunc.spelling} ref:{ref.spelling}')
+        # return []
+        return [(myfunc, ref, "READ")]
+
+    if parent.kind == CursorKind.BINARY_OPERATOR:
+        # Check if it's an assignment operator
+        # Get the token of the operator
+        # debug(f'BINARY OP: myfunc:{myfunc.spelling} ref:{ref.spelling}')
+        for token in parent.get_tokens():
+            if token.kind == TokenKind.PUNCTUATION and token.spelling in ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=']:
+                # Check if the MEMBER_REF_EXPR is on the left-hand side of the assignment
+                lhs_child = None
+                for child_of_binary in parent.get_children():
+                    lhs_child = child_of_binary
+                    break # The first child is usually the LHS
+
+                if lhs_child and lhs_child == cursor:
+                    return [(myfunc, ref, "WRITE")]
+                break 
+        return [(ref, myfunc, "READ")]
+
+    if parent.kind == CursorKind.UNARY_OPERATOR:
+        # debug(f'UNARY OP: myfunc:{myfunc.spelling} ref:{ref.spelling}')
+        # Check for increment/decrement operators
+        for token in parent.get_tokens():
+            if token.kind == clang.cindex.TokenKind.PUNCTUATION and token.spelling in ['++', '--']:
+                return [(myfunc, ref, "WRITE")]
+        return [(ref, myfunc, "READ")]
+
+    if parent.kind == CursorKind.UNEXPOSED_EXPR:
+        return [(ref, myfunc, "READ")]
+
+    if parent.kind == CursorKind.CALL_EXPR:
+        if parent.type.is_const_qualified():
+            return [(ref, myfunc, "READ")]
+        else:
+            return [(myfunc, ref, "WRITE")]
+
+
+    # debug(f'WHAT OP: myfunc:{myfunc.spelling} ref:{ref.spelling}[{ref.kind.name}] cursor:{cursor.spelling}[{cursor.kind.name}] parent:{parent.spelling}[{parent.kind.name}]')
+    return [(ref, myfunc, "READ")]
+
+
+def ast_ana_decl_ref_expr(path):
+    cur = path[-1]
+    ref = cur.referenced
+
+    if not ref:
+        if cur.spelling:
+            debug(f'Non-REF REF EXPR: cur:{cur.spelling}[{cur.kind.name}]')
+        return []
+
+    try:
+        myfunc = ast_ana_find_func(path)
+        mycall = ast_ana_find_parent(path, CursorKind.CALL_EXPR)
+    except ValueError:
+        # debug(f'REF EXPR not in function: cur:{cur.spelling}[{cur.kind.name}]')
+        return []
+    if mycall.type.is_const_qualified():
+        return [(ref, myfunc, 'READ')]
+    else:
+        return [(myfunc, ref, 'WRITE')]
+
+def ast_ana_ref_expr(path):
+    cur = path[-1]
+    ref = cur.referenced
+
+    if not ref:
+        if cur.spelling:
+            debug(f'Non-REF REF EXPR: cur:{cur.spelling}[{cur.kind.name}]')
+        return []
+
+    if ref.kind in (CursorKind.FIELD_DECL, CursorKind.VAR_DECL):
+        return ast_ana_var_op(path)
+
+    try:
+        myfunc = ast_ana_find_func(path)
+    except ValueError:
+        # debug(f'REF EXPR not in function: cur:{cur.spelling}[{cur.kind.name}]')
+        return []
+    if ref.kind == CursorKind.CXX_METHOD:
+        return [(myfunc, ref, "CALL")]
+
+    if not myfunc.spelling:
+        return []
+    if myfunc.spelling.startswith("_M_"):
+        return []
+
+    if ref.kind == CursorKind.OVERLOADED_DECL_REF:
+        # FIXME: not handling overloads correctly.
+        return [(myfunc, ref, "CALL")]
+
+    if ref.kind == CursorKind.CONVERSION_FUNCTION:
+        return []
+
+    debug(f'WHAT REF EXPR: myfunc:{myfunc.spelling} cur:{cur.spelling}[{cur.kind.name}] ref:{ref.spelling}[{ref.kind.name}]')
+    return [(myfunc, ref, "WHATREF")]
+
+
+def ast_ana_find_parent(path, kinds):
+    if isinstance(kinds, CursorKind):
+        kinds = [kinds]
+    path.reverse()
+    for one in path:
+        if one.kind in kinds:
+            return one
+        
+    # for one in path:
+    #     debug(f'Failed function path: {one.spelling}[{one.kind.name}]')
+    raise ValueError('failed to find function-like thing')
+def ast_ana_find_func(path):
+    return ast_ana_find_parent(path, function_kinds)
+
+
+def edge_data(assoc):
+    d = dict()
+    d['label'] = assoc.lower()
+    d['color'] = 'gray'
+    d['style'] = 'dotted'
+    d['weight'] = 1.0
+    if assoc == "READ":
+        d['color'] = 'forestgreen'
+        d['style'] = 'dashed'
+    elif assoc == "WRITE":
+        d['color'] = 'red'
+        d['style'] = 'dashed'
+    elif assoc == "CALL":
+        d['color'] = 'orange'
+        d['style'] = 'solid'
+
+    return d
+
+
+def decode_graph(graph, label=None):
+    '''
+    Return copy of graph with binary data decoded to POD.
+    '''
+    graph = graph.copy()
+
+    for edge in graph.edges:
+        assoc = graph.edges[edge].pop('assoc', None)
+        if assoc is None:
+            continue
+        graph.edges[edge].update(edge_data(assoc))
+
+    for node in graph.nodes:
+        if 'cursor' in graph.nodes[node]:
+            cursor = graph.nodes[node].pop("cursor")
+            graph.nodes[node].update(vertex_data(cursor, label))
+    return graph
+
+def class_flow_graph(cursor, graph):
+    '''
+    Return a flow graph between class member variables and functions.
+
+    This graph is "encoded" so that nodes have a 'cursor'.  See decode_graph()
+    to get a form that can go into dot.
+    '''
+    for tail, head, assoc in ast_ana([cursor]):
+        if not tail:
+            continue
+        if not head:
+            continue
+
+        td_ident = vertex_ident(tail)
+        hd_ident = vertex_ident(head)
+        if td_ident and hd_ident:
+            graph.add_node(td_ident, cursor=tail)
+            graph.add_node(hd_ident, cursor=head)
+            graph.add_edge(td_ident, hd_ident, assoc=assoc)
+
+
+@click.group()
+def cli():
+    """C++ Dependency Graph Generator"""
+    pass
+
+
+@cli.command("ast")
+@click.option('-o', '--output', default='/dev/stdout', 
+              help='Output file (default stdout in dot format)')
+@click.option('-I', '--include', multiple=True,
+              help="A directory in which include files are found")
+@click.argument('cpp_files', nargs=-1)
+def cmd_ast(output, include, cpp_files):
+    '''
+    Compile C++ source to AST and save as graph
+    '''
+    if not cpp_files:
+        debug("No input files")
+        sys.exit(1)
+
+    includes = ["-I"+i for i in include]
+    graph = nx.DiGraph()
+    for cpp_file in cpp_files:
+        tu = cpp_index(cpp_file, *includes)
+        for child in tu.cursor.get_children():
+            ast_graph(graph, child, tu.cursor)
+
+    graph.graph['graph'] = dict(rankdir='LR')
+    save_graph_to_dot(graph, output)
+
+def nodes_of_kind(graph, kind):
+    ret = list()
+    for node in graph.nodes:
+        if graph.nodes[node]['cursor'].kind == kind:
+            ret.append(node)
+    return ret
+
+def get_tu(cursor):
+    if cursor.kind == CursorKind.TRANSLATION_UNIT:
+        return cursor
+    if cursor.lexical_parent:
+        return get_tu(cursor.lexical_parent)
+    # raise ValueError(f'no lexical parent: {cursor.spelling}[{cursor.kind.name}]')
+    return None
+
+def is_cursor(cur, spelling=None, kind=None, **ignored):
+    # debug(f'is_cursor: cur={cur.spelling}[{cur.kind.name}] =?= {spelling}[{kind}]')
+    if spelling is not None and cur.spelling != spelling:
+        return False
+    if kind is not None and cur.kind.name != kind:
+        return False
+    return True
+
+
+def rule_all(mark="+", **kwds):
+    def visit(graph):
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            graph.nodes[node]['focus'] = mark
+    visit.name = "all"
+    return visit
+
+
+def rule_vertex(spelling=None, kind=None, mark="+", **kwds):
+    def visit(graph):
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            if not is_cursor(cur, spelling, kind):
+                continue
+            graph.nodes[node]['focus'] = mark
+    visit.name = "vertex"
+    return visit
+
+def rule_edge(tail={}, head={}, assoc=None, mark="+", **kwds):
+    def visit(graph):
+        for t,h in graph.edges:
+            if assoc is not None and assoc != graph.edges[edge].get('assoc', None):
+                continue
+            if ( is_cursor(graph.nodes[t]['cursor'], **tail) and 
+                 is_cursor(graph.nodes[h]['cursor'], **head) ):
+                graph.nodes[t]['focus'] = mark
+                graph.nodes[h]['focus'] = mark
+    visit.name = "edge"
+    return visit
+
+def rule_descendant(spelling=None, kind=None, mark="+", **kwds):
+    def visit(graph):
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            if not is_cursor(cur, spelling, kind):
+                continue
+            for other in nx.descendants(graph, node):
+                graph.nodes[other]['focus'] = mark
+    visit.name = "descendant"
+    return visit
+
+def rule_ancestor(spelling=None, kind=None, mark="+", **kwds):
+    def visit(graph):
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            if not is_cursor(cur, spelling, kind):
+                continue
+            for other in nx.ancestors(graph, node):
+                graph.nodes[other]['focus'] = mark
+    visit.name = "ancestor"
+    return visit
+
+def rule_connected(spelling=None, kind=None, mark="+", **kwds):
+    def visit(graph):
+        ugraph = graph.to_undirected(as_view=True)
+        for comp in nx.connected_components(ugraph):
+            for node in comp:
+                cur = graph.nodes[node]['cursor']
+                if is_cursor(cur, spelling, kind):
+                    for other in comp:
+                        graph.nodes[other]['focus'] = mark
+                    return
+    visit.name = "connected"
+    return visit
+
+def rule_ego(spelling=None, kind=None,
+             radius=1, distance='weight', center=True, undirected=False, mark="+", **kwds):
+    '''
+    Mark using ego graph.
+    '''
+    def visit(graph):
+        to_mark = set()
+        if undirected:
+            ugraph = graph.to_undirected(as_view=True)
+        else:
+            ugraph = graph
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            if is_cursor(cur, spelling, kind):
+                nng = nx.ego_graph(ugraph, node, center=center, radius=radius, distance=distance)
+                to_mark.update(nng.nodes)
+        for one in to_mark:
+            graph.nodes[one]['focus'] = mark
+        debug(f'rule_ego marked {len(to_mark)} with {mark}')
+    visit.name = "ego"
+    return visit
+
+
+
+def rule_purge(mark = "+", **kwds):
+    '''
+    Purge nodes with a '-' "focus" mark.
+
+    The provided mark is used for nodes that lack a "focus" mark.
+    '''
+
+    def visit(graph):
+        doomed = list()
+        for node in graph.nodes:
+            if graph.nodes[node].get('focus', mark) == '-':
+                doomed.append(node)
+        graph.remove_nodes_from(doomed)
+        debug(f'purged {len(doomed)} vertices assuming default mark of "{mark}"')
+    visit.name = "purge"
+    return visit
+
+
+def rule_bfs(spelling=None, kind=None, include_seed=False, depth=1, mark="+", **kwds):
+    '''
+    Mark with DFS to a given depth.
+    '''
+    def visit(graph):
+        to_mark = set()
+        for node in find_vertices(graph, spelling, kind):
+            cur = graph.nodes[node]['cursor']
+            debug(f'BFS: {cur.spelling}[{cur.kind.name}]')
+            if include_seed:
+                debug(f'BFS: including seed: {node}')
+                to_mark.add(node)
+            if depth > 0:
+                succs = list(nx.bfs_successors(graph, node, depth_limit=depth))
+                debug(f'BFS: {node}: {len(succs)} successors: {succs}')                
+                for parent, children in succs:
+                    to_mark.update(children)
+
+        for one in to_mark:
+            graph.nodes[one]['focus'] = mark
+
+    visit.name = "dfs"
+    return visit
+
+
+def rule_intraclass(spelling=None, include_class=False, depth=1, mark='+', **kwds):
+    '''
+    Mark member variables and methods of classes in spellings.
+
+    If include_class is true, mark the class itself.  With a '+' mark, this will
+    cause "variable" and "function" edges to also remain.
+
+    Depth limits how far from the class vertex to walk when applying marks.  A
+    depth of 1 will mark the class function and variable members.  A depth of 2
+    will include call edges.
+    '''
+    def visit(graph):
+        to_mark = set()
+        for node in graph.nodes:
+            cur = graph.nodes[node]['cursor']
+            if not is_cursor(cur, spelling, 'CLASS_DECL'):
+                continue
+            if include_class:
+                to_mark.add(node)
+            for parent, children in nx.bfs_successors(graph, node, depth_limit=depth):
+                # debug(f'intraclass: {parent=} {children=}')
+                to_mark.update(children)
+
+        for one in to_mark:
+            graph.nodes[one]['focus'] = mark
+
+    visit.name = "intraclass"
+    return visit
+                
+def find_vertices(graph, spelling=None, kind=None):
+    '''
+    Return list of cursors matching spelling and/or kind.  A value of None
+    matches any.
+    '''
+    return [n for n in graph.nodes if is_cursor(graph.nodes[n]['cursor'], spelling, kind)]
+                    
+def cur_name(cur):
+    return f'{cur.spelling}[{cur.kind.name}]'
+def node_name(node, graph=None):
+    if graph is None:
+        return node
+    return cur_name(graph.nodes[node]['cursor'])
+
+def rule_calls(spelling=None, kind=None, depth=None, include_seed=False, mark="+", **kwds):
+    '''
+    Mark all nodes found through calls.  This starts a BFS at given one or
+    more function or variable vertices.  When in a function vertex, add all
+    read/write/call neighbors.  When in a variable vertex add all read/write
+    neighbors.
+    '''
+    def visit(graph):
+        to_mark = set()
+        for node in find_vertices(graph, spelling, kind):
+            # debug(f'CALLS: {node_name(node, graph)}')
+            to_check = [node]
+            to_check += list(dict(nx.bfs_successors(graph, node, depth_limit=depth)).keys())
+            for seed in to_check:
+                to_mark.add(seed)
+                for nn_vtx in graph.successors(node):
+                    edge = graph.get_edge_data(node, nn_vtx)
+                    # debug(f'CALLS: {node_name(nn_vtx, graph)} {edge}')
+                    if edge.get('assoc') in ("READ", "WRITE", "CALL"):
+                        to_mark.add(nn_vtx)
+                for nn_vtx in graph.predecessors(node):
+                    edge = graph.get_edge_data(nn_vtx, node)
+                    # debug(f'CALLS: {node_name(nn_vtx, graph)} {edge}')
+                    if edge.get('assoc') in ("READ", "WRITE", "CALL"):
+                        to_mark.add(nn_vtx)
+
+            if not include_seed:
+                to_mark.remove(node)
+
+        for one in to_mark:
+            graph.nodes[one]['focus'] = mark
+
+    visit.name = "calls"
+    return visit
+
+def focused_graph(graph, rules):
+    '''
+    Return a focused subgraph.
+
+    This applies the list rules, each a callable on the graph so that they may
+    set the "focus" attribute on vertices.  Generally, a value of "+" will keep
+    the vertex and a value of "-" will remove it.  An accepting or rejecting
+    rule can determine how unmarked vertices will be purged or not.
+
+    The input graph is not modified, the focused graph is returned.
+    '''
+    graph = graph.copy()
+
+    for rule in rules:
+        rule(graph)
+        kinds = count_kinds(graph)
+        nclss = kinds['CLASS_DECL']
+        nvars = kinds['CXX_METHOD']
+        nfuns = kinds['FIELD_DECL']
+        debug(f'{rule.name}: {len(graph.nodes)} nodes, {len(graph.edges)} edges, {nclss} classes, {nvars} class member variables and {nfuns} class member functions')
+
+    return graph
+
+import tomllib
+
+def rule_meth(name, cfg):
+    alg = cfg['algorithm']
+    meth = globals()[f'rule_{alg}']
+    return meth(**cfg)
+    
+def parse_rules(cfg):
+    rules_cfg = cfg["rule"]
+    if not rules_cfg:
+        return
+    for name, cfg in rules_cfg.items():
+        debug(f'rule "{name}": {cfg}')
+        rule = rule_meth(name, cfg)
+        if not rule:
+            raise ValueError(f'failed to get rule for "{name}": {cfg}')
+        yield rule
+
+
+def parse_graphs(cfg, select_graphs = ()):
+    graphs_cfg = cfg['graph']
+
+    if not graphs_cfg:
+        raise ValueError("no graphs defined")
+
+    rules_cfg = cfg['rule']
+
+    if not select_graphs:
+        select_graphs = graphs_cfg.keys()
+    debug(f'GRAPHS: {select_graphs}')
+
+    for name in select_graphs:
+        gcfg = graphs_cfg[name]
+        oname = gcfg['out_file']
+        debug(f'graph "{name}": -> {oname}')
+        rules = list()
+        for rule_name in gcfg['rules']:
+            rule_cfg = rules_cfg[rule_name]
+            debug(f'\trule "{rule_name}": {rule_cfg}')
+            rule = rule_meth(rule_name, rule_cfg)
+            rules.append(rule)
+        gcfg['rules'] = rules
+        yield gcfg
+
+from collections import Counter
+def count_kinds(graph):
+    kinds = [graph.nodes[n]['cursor'].kind.name for n in graph.nodes]
+    return Counter(kinds)
+
+
+@cli.command("flow")
+@click.option('-o', '--output', default='/dev/stdout', 
+              help='Output file (default stdout in dot format)')
+@click.option('-I', '--include', multiple=True,
+              help="A directory in which include files are found")
+@click.option('-c', '--config', default=None,
+              help="A focus selector configuration file")
+@click.argument('cpp_files', nargs=-1)
+def cmd_flow(output, include, config, cpp_files):
+    '''
+    Compile C++ source to AST and save as graph
+    '''
+    with open(config, "rb") as fp:
+        config = tomllib.load(fp)
+    includes = ["-I"+i for i in include]
+
+    comp = config.get('compile', None)
+    if comp:
+        includes += ['-I'+one for one in comp.get("includes", [])]
+        cpp_files = list(cpp_files) + comp.get('cpp_files', [])
+
+    if not cpp_files:
+        raise ValueError("No c++ files")
+
+    rules = parse_rules(config)
+
+    tus = list()
+    for cpp_file in cpp_files:
+        debug(f'compiling {cpp_file}')
+        tu = cpp_index(cpp_file, *includes)
+        tus.append(tu)
+
+    debug("building flow graph")
+    graph = nx.DiGraph()
+    for tu in tus:
+        class_flow_graph(tu.cursor, graph)
+    debug(f'flow graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges')
+    kinds = count_kinds(graph)
+    nclss = kinds['CLASS_DECL']
+    nvars = kinds['CXX_METHOD']
+    nfuns = kinds['FIELD_DECL']
+    debug(f'code with {nclss} classes, {nvars} class member variables and {nfuns} class member functions')
+
+    if rules:
+        graph = focused_graph(graph, rules)
+
+    graph = decode_graph(graph)
+
+    graph.graph['graph'] = dict(rankdir='LR')
+
+    save_graph_to_dot(graph, output)
+
+def to_list(*things, delim=","):
+    ones = list()
+    for thing in things:
+        if isinstance(thing, str):
+            ones += thing.split(delim)
+        else:
+            ones += to_list(*thing, delim)
+    ones = [one.strip() for one in ones]
+    return [one for one in ones if one]
+
+@cli.command("multi")
+@click.option('-I', '--include', multiple=True,
+              help="A directory in which include files are found")
+@click.option('-c', '--config', default=None,
+              help="A focus selector configuration file")
+@click.option('--label', type=str, default=None,
+              help="A custom f-string like for forming the vertex label")
+@click.option('-g', '--graph', "select_graphs", multiple=True,
+              help="A graph name in cfg to generate, default all, can comma-separate")
+@click.option('-O', '--option', multiple=True,
+              help="A GraphViz graph level option in 'key=val' form")
+@click.argument('cpp_files', nargs=-1)
+def cmd_multi(include, config, label, select_graphs, option, cpp_files):
+    '''
+    Compile C++ source to AST and save as multiple graphs
+    '''
+    with open(config, "rb") as fp:
+        config = tomllib.load(fp)
+    includes = ["-I"+i for i in include]
+
+    comp = config.get('compile', None)
+    if comp:
+        includes += ['-I'+one for one in comp.get("includes", [])]
+        cpp_files = list(cpp_files) + comp.get('cpp_files', [])
+
+    if not label:          # CLI wins, cfg is 2nd place, 3rd place is hard-wired
+        label = comp.get("label", None)
+
+    if not cpp_files:
+        raise ValueError("No c++ files")
+
+    graphs = parse_graphs(config, to_list(select_graphs))
+
+    graph_options = dict(rankdir="LR") # TD tends to look bad, but user can override
+    for opt in option:
+        k,v = opt.split("=",1)
+        graph_options[k] = v
+
+
+    tus = list()
+    for cpp_file in cpp_files:
+        debug(f'compiling {cpp_file}')
+        tu = cpp_index(cpp_file, *includes)
+        tus.append(tu)
+
+    debug("building flow graph")
+    graph = nx.DiGraph()
+    for tu in tus:
+        class_flow_graph(tu.cursor, graph)
+    debug(f'flow graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges')
+    kinds = count_kinds(graph)
+    nclss = kinds['CLASS_DECL']
+    nvars = kinds['CXX_METHOD']
+    nfuns = kinds['FIELD_DECL']
+    debug(f'code with {nclss} classes, {nvars} class member variables and {nfuns} class member functions')
+
+    for gcfg in graphs:
+        out_file = gcfg['out_file']
+        rules = gcfg['rules']
+        debug(f'{len(rules)} rules -> {out_file}')
+        gr = focused_graph(graph, gcfg['rules'])
+        gr = decode_graph(gr, label)
+        if graph_options:
+            gr.graph['graph'] = graph_options
+        save_graph_to_dot(gr, out_file)
+
+
+
+if __name__ == "__main__":
+    cli()

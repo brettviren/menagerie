@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# shellcheck disable=SC1091
+# source "$(dirname "${BASH_SOURCE[0]}")/helpme.sh"
+
+action="install"
+pkgs=()
+while [[ $# -gt 0 ]] ; do
+    case "$1" in
+        -U|--upgrade|upgrade) action="upgrade"; shift ;;
+        *) pkgs+=( "$1" ) ; shift ;;
+    esac
+done
+if [ -z "$pkgs" ] ; then
+    pkgs=(barpyrus titome herbie rephile promnesia wormhole)
+fi
+
+# https://docs.astral.sh/uv
+# export UV_TOOL_BIN_DIR=$HOME/sync/bin
+# export UV_TOOL_DIR=$HOME/sync/share/uv/tools
+do_uv () {
+    rm -f ~/.local/bin/{uv,uvx} ~/sync/bin/{uv,uvx}
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    echo "moving to $HOME/sync/bin/"
+    mv ~/.local/bin/{uv,uvx} ~/sync/bin/
+    uv --version
+}
+
+do_barpyrus () {
+    uv tool install git+https://github.com/t-wissmann/barpyrus
+}
+
+do_titome () {
+    uv tool install --with pytz --with parsedatetime \
+       git+https://github.com/brettviren/titome
+}
+
+do_herbie () {
+    ## may need: apt install libgirepository1.0-dev
+    uv tool install git+https://github.com/brettviren/herbie
+}
+
+do_rephile () {
+    uv tool install git+https://github.com/brettviren/rephile
+}
+
+do_promnesia () {
+    uv tool install \
+       --with orgparse \
+       --with mistletoe \
+       --with python-magic \
+       --with bs4 \
+       --with HPI \
+       --with cashew \
+       --with logzero \
+       --with orjson \
+       --with mypy \
+       --with git+https://github.com/karlicoss/rexport \
+       promnesia
+}
+
+do_wormhole () {
+    uv tool install magic-wormhole
+}
+
+
+for pkg in $pkgs
+do
+    if [ "$action" = "upgrade" ] ; then
+        uv tool uninstall $pkg
+    fi
+    do_$pkg
+done
+

@@ -1,0 +1,48 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["click"]
+# ///
+
+import click
+
+@click.group()
+def cli():
+    pass
+
+@cli.command("teeth")
+@click.option("--rd", type=int, default=37,
+              help="RD capacity")
+@click.option("-r","--rings", type=int, nargs=2, default=[53,39],
+              help="pair of chain rings teeth like: 53 39")
+@click.option("-c","--cogs", type=int, nargs=2, default=[11,32],
+              help="cog teeth range like: 11 32")
+def teeth(rd, rings, cogs):
+    '''
+    Calculate teeth related things
+    '''
+    outer_ring = max(rings[0], rings[1])
+    middle_ring = min(rings[0], rings[1])
+    fdiff = outer_ring - middle_ring
+    small_cog = min(cogs[0], cogs[1])
+    big_cog = max(cogs[0], cogs[1])
+    rdiff = big_cog - small_cog
+    used = fdiff+rdiff
+    remaining = rd - used
+    inner_ring = middle_ring - remaining
+
+    ratio_inner = inner_ring / big_cog
+    ratio_middle = middle_ring / big_cog
+    ratio_outer = outer_ring / small_cog
+    ratio3 = ratio_outer / ratio_inner
+    ratio2 = ratio_outer / ratio_middle
+
+
+    print(f'RD:{rd}t rings:{outer_ring}/{middle_ring} cogs:{big_cog}-{small_cog} used:{used} smallest inner:{inner_ring} ratio2:{100*ratio2:.2f}% ratio3:{100*ratio3:.2f}%')
+    
+
+def main():
+    cli()
+
+if '__main__' == __name__:
+    main()

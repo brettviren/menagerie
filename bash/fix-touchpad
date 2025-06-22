@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# My thinkpads' touchpads sometimes freaks out or goes away
+
+sudo rmmod -f psmouse; sudo modprobe -v psmouse resync_time=2 resetafter=2 synaptics_intertouch=1

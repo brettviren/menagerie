@@ -1,0 +1,35 @@
+#!/bin/bash
+
+cat <<EOF >&2
+Consider using devdocs.el and dedoc CLI.
+Or, visit  https://devdocs.io/cpp
+EOF
+
+query="$1"
+
+base=/usr/share/cppreference/doc/html/en/cpp
+
+if [ ! -d "$base" ] ; then
+    echo "No cppreference-doc-en-html installed, installing now:"
+    sudo apt-get install cppreference-doc-en-html
+fi
+
+cd $base
+
+if [ -n "$query" ] ; then
+    got=$(find . -name '*.html'| sed -e 's,^\./,,g' -e 's,\.html,,' | grep $query | fzf)
+else
+    got=$(find . -name '*.html'| sed -e 's,^\./,,g' -e 's,\.html,,' | fzf)
+fi
+if [ "$?" -ne 0 ] ; then
+    exit
+fi
+if [ -z "$got" ] ; then
+    got=index
+fi
+
+${WEBTUI:-w3m} "$base/${got}.html"
+
+# enc=$(echo "$@" | python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read()))")
+
+# links "https://duckduckgo.com/?sites=cppreference.com&q=$enc&ia=web"

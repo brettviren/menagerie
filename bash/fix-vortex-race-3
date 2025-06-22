@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# This is just a memo for when my keyboard loses itself and I forget how to fix
+# it.
+
+cat <<EOF
+First timply try replugging the USB.  
+
+Else, hold both Alt keys for 5 seconds to enter programming mode.
+
+- Pn-L for "Linux" mode.
+
+- Pn-[12345] messes with the LED modes.
+
+EOF
+

@@ -1,0 +1,27 @@
+#+title: My script menagerie 🦜🐒🐍
+
+This holds the subset of scripts I've developed / collected / adapted over the years that may potentially be useful to others.
+
+You are free to use them according to the [[https://www.gnu.org/licenses/agpl-3.0.en.html][Affero General Public License (AGPL)]].
+
+Some scripts have personalized configuration information that requires you to hack them for them to be usable in your environment.
+
+The scripts are organized by implementation language:
+
+- [[file:bash/][bash]]
+- [[file:python/][python]]
+
+Most scripts begin with comments providing a usage description and/or will print this info with ~-h/--help~  options or no options.
+
+Most scripts are stand-alone but some utilize shared code or behavior:
+
+Bash scripts:
+
+- Some will try to install needed programs if they are not available.  They will run ~sudo apt-get install~.  
+- Some use the provided [[bash/helpme.sh][helpme]] CLI helper.
+
+Python scripts
+
+- Most have [[https://docs.astral.sh/uv/guides/scripts/][uv script magic]] to satisfy dependencies, ~uv~ is effectively required.
+- Many use Click for CLI.
+

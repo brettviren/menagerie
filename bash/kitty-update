@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Install / update kitty to a syncthing-controlled area but link it in locally
+
+dest=${SYNCBIN:-$HOME/sync/bin}
+
+curl -L https://sw.kovidgoyal.net/kitty/installer.sh |
+    sh /dev/stdin launch=n dest=$dest
+
+# put kitty in our PATH
+cd $dest
+ln -sf kitty.app/bin/{kitty,kitten} .
+
+

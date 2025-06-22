@@ -1,0 +1,18 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["click","lxml","requests"]
+# ///
+'''
+My interface to info about people.
+'''
+import mypyco                   # to munge sys.path
+import people
+
+import click
+
+# expand as more comes
+# cli = click.CommandCollection(sources=[people.dune.cli])
+cli = people.dune.cli
+if __name__ == '__main__':
+    cli()

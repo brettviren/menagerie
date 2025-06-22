@@ -1,0 +1,464 @@
+#!/usr/bin/env -S uv run --script
+# -*- python -*-
+# /// script
+# dependencies = ["click"]
+# ///
+import os
+import sys
+import re
+import time
+import json
+import click
+import sqlite3
+
+from pathlib import Path
+import subprocess
+from datetime import datetime
+from urllib.parse import urlparse, unquote
+
+# list of things that wget reports which are recognied here.
+# anything not listed is ignored.
+# these are a sub-set of the table colums.
+known_wget_headers = [
+    'Content-Type',
+    'Content-Length',
+    'Etag',
+    'Date',
+    'Last-Modified',
+]
+
+
+def parse_keyval(key, val):
+    val = val.strip()
+
+    # remove unknown headers
+    if key not in known_wget_headers:
+        # print("Skipping header: %s : %s" % (key, val))
+        return None
+
+    if key in ('Date', 'Last-Modified'):
+        # Sat, 29 Dec 2018 12:37:31 GMT
+        try:
+            _, dstr = val.split(',', 1)
+            dt = time.strptime(dstr.strip(), '%d %b %Y %H:%M:%S GMT')
+        except ValueError as e:
+            print(e)
+            print(val)
+            print("returning 'now' instead")
+            return datetime.now()
+        return datetime(*dt[:6])
+
+    if key == 'Content-Length':
+        return int(val)
+
+    if key == 'ETag':
+        if val.startswith('"'):
+            return val[1:-1]
+        return val
+
+    return val
+
+
+def parse_head(head):
+    parts = head.split()
+    d = parts[0]
+    t = parts[1]
+    url = parts[-1]
+
+    dt = map(int, d[2:].split('-') + t[:-2].split(':'))
+    dt = datetime(*dt)
+    dat = dict(url=url, check_time=dt)
+    return dat
+
+
+def parse(head, block):
+    '''
+    Parse head line and block lines and return dictionary.
+
+    Raise ValueError if parsing fails
+    '''
+    dat = parse_head(head)
+
+    for line in block:
+        if not line.startswith(" "):
+            continue
+        line = line.strip()
+        if line.startswith("HTTP/"):
+            parts = line.split()
+            dat['http_code'] = int(parts[1])
+            continue
+        try:
+            key, val = line.split(":", 1)
+        except ValueError as e:
+            print(e)
+            print('Failed to parse: "%s"' % line)
+            raise
+        val = parse_keyval(key, val)
+        if val is None:
+            continue
+        dat[key] = val
+
+    return dat
+
+
+def chunker(fp):
+    'Generate dictionaries from log stanzas'
+
+    def start(fp):
+        'Go to and return next stanza start'
+        while True:
+            line = fp.readline()
+            if not line:
+                # print(f'no line in {fp}')
+                return None
+            line = line[:-1]
+            # print(f'start: {line}')
+            if line.startswith("--"):
+                return line
+            continue
+
+    def block(fp):
+        'Slurp and return block lines'
+        lines = list()
+        while True:
+            line = fp.readline()
+            if not line:
+                return lines
+            line = line[:-1]
+            if not line.strip():
+                return lines
+            lines.append(line)
+
+    last_url = None
+    while True:
+        head = start(fp)
+        if not head:
+            # print('no head')
+            return
+        body = block(fp)
+        if not body:
+            # print('no body')
+            return
+        dat = parse(head, body)
+
+        # wget apparently does some look-before-leap error handling
+        # and this can cause duplicate log blurbs.
+        if dat['url'] == last_url:
+            continue
+        last_url = dat['url']
+
+        yield dat
+
+
+def open_log(filename):
+    return chunker(open(filename, "r", encoding='utf-8', errors='ignore'))
+
+
+def find_db_file(filename):
+    if not (filename is None or filename in ["", "-"]):
+        return filename
+
+    for maybe in "od.db /srv/bv/od.db".split():
+        if os.path.exists(maybe):
+            return maybe
+    raise ValueError("no default db file found")
+
+
+def open_db(filename):
+    filename = find_db_file(filename)
+    # print(f'using {filename=}')
+
+    def adapt_datetime(ts):
+        return time.mktime(ts.timetuple())
+
+    def regexp(y, x, search=re.search):
+        return 1 if search(y, x) else 0
+
+    conn = sqlite3.connect(filename,
+                           detect_types=sqlite3.PARSE_DECLTYPES |
+                           sqlite3.PARSE_COLNAMES)
+    conn.create_function('regexp', 2, regexp)
+
+    cur = conn.cursor()
+    cur.execute('''CREATE TABLE IF NOT EXISTS
+    urls
+    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT,
+    content_type TEXT,
+    content_length INTEGER,
+    etag TEXT,
+    check_time TIMESTAMP,
+    date TIMESTAMP,
+    last_modified TIMESTAMP,
+    http_code INTEGER
+    );''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS
+    urls_index ON urls(url);''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS
+    urls_type ON urls(content_type);''')
+    conn.commit()
+    return conn
+
+
+def insert_db(cur, dat):
+    keys = dat.keys()
+    sqlkeys = [k.lower().replace('-', '_') for k in keys]
+    vals = [dat[k] for k in keys]
+    # sql = 'INSERT INTO  urls(%s) VALUES (%s);' \
+    # % (', '.join(sqlkeys), ','.join(['?']*len(keys)))
+    url = dat["url"]
+    vallist = ', '.join(sqlkeys)
+    qqq = ','.join(['?']*len(keys))
+
+    sql = '''INSERT OR REPLACE INTO  urls(ID, %s)
+             VALUES ((select ID from urls WHERE url = "%s"), %s);''' \
+                 % (vallist, url, qqq)
+    cur.execute(sql, vals)
+
+
+def load_db(db, log):
+    cur = db.cursor()
+    count = 0
+    for dat in log:
+        insert_db(cur, dat)
+        # count += 1
+        # if count % 100 == 0:
+        #     print (count)
+
+def dumpn(log, count=100):
+    for dat in log:
+        if dat is None:
+            return
+        print(dat)
+        count -= 1
+        if count <= 0:
+            return
+
+
+class Context:
+    def __init__(self, dbfile):
+        self.dbfile = dbfile
+
+    def connect(self):
+        return open_db(self.dbfile)
+
+
+@click.group()
+@click.option("--db", default=Path.home() / "wget-spider.db")
+@click.pass_context
+def cli(ctx, db):
+    '''
+    Spider a web site, make a DB of URLs found, query DB.
+    '''
+
+    ctx.obj = Context(db)
+
+
+@cli.command("clean")
+@click.argument("dbfile")
+@click.pass_context
+def cli_clean(ctx):
+    '''Clean some unwanted entries from the DB file.'''
+    with ctx.obj.connect() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM urls WHERE url LIKE "%/?%";')
+        print(f'deleted {cur.rowcount} parameter urls')
+
+
+@cli.command("purge")
+@click.argument("where")
+@click.pass_context
+def cli_purge(ctx, where):
+    '''Purge some unwanted entries from the DB file.'''
+    with ctx.obj.connect() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM urls WHERE %s' % where)
+        print('purged {cur.rowcount} parameter urls')
+
+
+@cli.command("load")
+@click.argument("logfile")
+@click.pass_context
+def cli_load(ctx, logfile):
+    '''load a wget log file into the db'''
+    log = open_log(logfile)
+    with ctx.obj.connect() as conn:
+        load_db(conn, log)
+
+
+@cli.command("parse")
+@click.argument("logfile")
+@click.pass_context
+def cli_parse(ctx, logfile):
+    '''load a wget log file to check parsing'''
+    log = open_log(logfile)
+    for dat in log:
+        print(dat)
+
+
+def row_to_dict(cur, row):
+    d = dict()
+    for idx, col in enumerate(cur.description):
+        d[col[0]] = row[idx]
+    return d
+
+
+def dump_dict(dat, *args):
+    print(dat)
+
+
+def dump_json(dat, *args):
+    print(json.dumps(dat))
+
+
+def dump_format(dat, pat):
+    dat['url'] = unquote(dat['url'])
+    print(pat.format(**dat))
+
+
+@cli.command("count")
+@click.argument("where")
+@click.pass_context
+def cli_count(ctx, where):
+    '''count <where> [<dbfile> [pattern]]'''
+    with ctx.obj.connect() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT (*) FROM urls WHERE %s' % where)
+        print(cur.fetchone()[0])
+
+
+@cli.command("find")
+@click.option('-p', '--pattern', default='{url}')
+@click.argument("where", nargs=-1)
+@click.pass_context
+def cli_find(ctx, where, pattern):
+    '''search DB and format results
+
+    Example WHERE's:
+    - column_1 = 100;
+    - column_2 IN (1,2,3);
+    - column_3 LIKE 'An%';
+    - column_4 BETWEEN 10 AND 20;
+    - "url like '%/series/%bodyguard%720p%' and content_type <> 'text/html'"
+    - "url regexp '.*/series/[^/]+/$'"
+    '''
+    where = ' '.join(where)
+    if not where:
+        where = "true"
+
+    if not pattern or pattern in ["raw", "dict"]:
+        out = dump_dict
+    elif pattern == "json":
+        out = dump_json
+    else:
+        out = dump_format
+
+    with ctx.obj.connect() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM urls WHERE %s' % where)
+        for one in cur.fetchall():
+            d = row_to_dict(cur, one)
+            out(d, pattern)
+
+
+@cli.command("grep")
+@click.argument("regexp", nargs=-1)
+@click.pass_context
+def cli_grep(ctx, regexp):
+    '''grep URLs'''
+    regexp = ' '.join(regexp)
+    if not regexp:
+        print('no grep regexp given')
+        return
+
+    out = dump_format
+
+    with ctx.obj.connect() as conn:
+        cur = conn.cursor()
+        query = f"SELECT * FROM urls WHERE lower(url) REGEXP '{regexp}' "
+        sys.stderr.write(f'{query=}\n')
+        cur.execute(query)
+        for one in cur.fetchall():
+            d = row_to_dict(cur, one)
+            out(d, "'{url}'")
+
+
+@cli.command("spider")
+@click.argument("site")
+@click.pass_context
+def cli_spider(ctx, site):
+    '''Spider a site'''
+
+    p = urlparse(site)
+    if not p.hostname:
+        raise click.BadArgumentUsage(f'does not look like a site: {site}')
+
+    now = datetime.now()
+    ts = now.strftime("%Y%m%d-%H%M%S")
+
+    cdir = Path.home() / '.cache/wget-spider' / p.hostname
+
+    cookies = cdir / "cookies"
+    logsdir = cdir / "logs"
+    logsdir.mkdir(parents=True, exist_ok=True)
+
+    logfile = logsdir / ts
+    print(f'logging to: {logfile}')
+
+    cmd = ['wget', '--no-check-certificate', '--no-parent',
+           '-e', 'robots=off',
+           '-R', r'\?C=,*.m4b,random,*.lit',
+           f'--load-cookies={cookies}',
+           f'--save-cookies={cookies}',
+           '--keep-session-cookies',
+           '--recursive',
+           '--level=inf',
+           '--spider',
+           '--server-response',
+           '--no-directories',
+           '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10.8; rv:21.0) Gecko/20',
+           f'--output-file={logfile}',
+           site]
+    cmdstr = " ".join(cmd)
+    #print(cmdstr)
+    proc = subprocess.run(cmd, shell=False, cwd=cdir, capture_output=True)
+
+    wget_errors = [
+        "No problems occurred.",
+        "Generic error code.",
+        "Parse  error",
+        "File I/O error.",
+        "Network failure.",
+        "SSL verification failure.",
+        "Username/password authentication failure.",
+        "Protocol errors.",
+        "Server issued an error response."
+    ]
+    if proc.returncode:
+        err = wget_errors[proc.returncode]
+        print(f'wget returns error: {err}')
+    if proc.stdout:
+        print(proc.stdout.decode())
+    if not logfile.exists:
+        print('wget produced no log file')
+        return
+    siz = 0
+    with logfile.open() as fp:
+        for line in fp.readlines():
+            if line.startswith("Length: "):
+                chunks = line.split(" ")
+                try:
+                    this_size = int(chunks[1])
+                except ValueError:
+                    continue
+                siz += this_size
+    siz /= 1e9
+    print(f'{siz:.3f} GB')
+
+    log = open_log(logfile)
+    with ctx.obj.connect() as conn:
+        load_db(conn, log)
+
+
+if __name__ == '__main__':
+    cli()

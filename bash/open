@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Use our own openner because leaving it to xdg-open leads to
+# insanity.
+
+# snip from helpme.sh
+helpme_name=open
+helpme_log="${XDG_CACHE_HOME:-$HOME/.cache}/${helpme_name:-helpme}/log"
+mkdir -p "$(dirname "$helpme_log")"
+
+logit () {
+    ts '%Y-%m-%d %H:%M:%.S ' >> $helpme_log
+}
+
+echo "$*" | logit
+
+if [[ "$1" = http* ]] ; then
+    exec "$HOME/scripts/web-browser" "$1" 
+fi
+
+if [ ! -x "$(which handlr)" ] ; then
+    echo "Install handlr: https://github.com/chmln/handlr" 1>&2
+    exit 1
+fi
+
+handlr open "$@" 2>&1 | logit

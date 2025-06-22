@@ -1,0 +1,9 @@
+#!/bin/bash
+if [ -z "$1" ] ; then
+    echo "Upload to 0x0.st"
+    echo
+    echo "    usage: 0x0 <file>"
+    exit 1
+fi
+
+curl -F'file=@'"$1" https://0x0.st

@@ -1,0 +1,4 @@
+#!/bin/bash
+# set the key board rate.
+
+xset r rate 250 30

@@ -1,0 +1,9 @@
+#!/usr/bin/env python
+'''
+CLI to mypoco.py
+'''
+
+import mypyco
+
+if '__main__' == __name__:
+    mypyco.cli()

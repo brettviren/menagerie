@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/helpme.sh"
+
+# helpme-test [-h|--help] | [cmd [options...]]
+#
+# This is a tester for helpme.
+#
+# It defines a few functions following helpme's rules.
+#
+
+# This is not a docstring, just a comment.
+
+# myfunc [args ...]
+#
+# Do something with args.
+cmd_myfunc () {
+    for one in "$@" ; do
+        log "arg:|$one|"
+    done
+}
+
+# myfunc2 [args ...]
+#
+# Do something else with args.
+cmd_myfunc2 () {
+    for one in "$@" ; do
+        debug "|$one|"
+    done
+}
+
+
+helpme "${BASH_SOURCE[0]}" "$@"

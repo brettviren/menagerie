@@ -1,0 +1,1 @@
+curl wttr.in 2>/dev/null | tail +3|head -5

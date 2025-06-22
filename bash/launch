@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+
+# Launch application by its .desktop name
+
+app="$1" ; shift
+
+if [ ! -x $(which gtk-launch) ] ; then
+    echo "No gtk-launch, installing libgtk-3-bin:" >&2
+    sudo apt-get install libgtk-3-bin
+fi 
+
+exec gtk-launch "$app"
+
+# if [ -x /usr/bin/dex ] ; then
+#     exec dex --search-paths $HOME/.local/share/applications "${app}.desktop"
+# fi
+

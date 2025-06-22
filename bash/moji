@@ -1,0 +1,39 @@
+#!/usr/bin/bash
+
+url="https://unicode.org/Public/emoji/15.1/emoji-test.txt"
+emojidb="$HOME/.local/share/emojidb/emoji.v15.1"
+
+_checkCommand() { command -v "$@" &>/dev/null; }
+_checkDependencies() {
+  local -a dependencies=( fzf curl )
+  local -a missingDependencies=()
+  for dependency in "${dependencies[@]}"; do
+    _checkCommand "$dependency" || missingDependencies+=( "$dependency" )
+  done
+  if [[ -n "${missingDependencies[@]}" ]]; then
+    echo "ERROR: Missing dependency(ies): "${missingDependencies[@]}""
+    exit 1
+  fi
+}
+_createEmojiList() {
+  mkdir -p "${emojidb%/*}"
+  curl -s "$url" | sed '
+      /^#/d          # remove comments
+      /^\s*$/d       # remove empty lines
+      /skin tone/d   # remove skin tones
+      s/^[^#]*# //   # remove first column
+      s/\bE[0-9.]\+// # remove E number
+  ' > "$emojidb"
+}
+_printEmojiCopyClipboard() {
+  [[ -f "$emojidb" ]] || _createEmojiList
+  local emoji=$(fzf < "$emojidb")
+  emoji=${emoji%% *}
+  printf "%s\n" "$emoji"
+  if _checkCommand xclip; then
+      printf %s "$emoji" | xclip -sel clipboard
+  else
+      printf "%s\n" "Install xclip for automatic copy to clipboard"
+  fi
+}
+_checkDependencies && _printEmojiCopyClipboard

@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# There's a few ways to install UV.  Though this one takes some trust, I'm okay
+# with it.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+

@@ -1,0 +1,152 @@
+#!/bin/bash
+
+# set -x
+
+### how it started:
+# scrot -s -e 'mv \$f ~/ss/ ; rephile.sh imgur -w ~/ss/\$f'"
+### how it's going:
+
+usage () {
+    cat <<EOF
+    screenshot [-m|--magnify] [-s|--select] [-u|--upload] [-e|--extension [jpg|png]]
+
+A CLI wrapper for whatever screenshot tool is currently hip to use.
+
+If "select" is passed then the user must click on a window or select a
+rectangular region.
+
+If "upload" is passed then the result is uploaded to a popular
+Internet server.
+
+The resulting file path or URL if "upload" is used will reside in the
+primary X selection.
+
+EOF
+    exit
+}
+
+# See "~/scripts/per" for installation.
+rephile="$HOME/.local/bin/rephile"
+if [ ! -x "$rephile" ] ; then
+    echo "No rephile"
+    exit 1
+fi
+export REPHILE_CACHE=$HOME/.rephiledb
+
+die () {
+    msg="$1"
+    echo "$msg" 1>&2
+    notify-send "Screenshot failed" "$msg"    
+    exit 255
+}
+
+tmpdir=$(mktemp -d /tmp/screenshot-XXXX)
+cleanup () {
+    if [ -d "$tmpdir" ] ; then
+        rm -r "$tmpdir"
+    fi
+}
+trap cleanup EXIT
+
+ssdir="$HOME/ss"
+mkdir -p "$ssdir"
+
+dstring="$(date +'%Y-%m-%d-%H%M%S')"
+sscmd=(maim --noopengl --hidecursor)
+ssargs=()
+incmd="digest"
+ext="png"
+toclip="file"
+
+curwin="$(printf "0x%08x\n" "$(xdotool getwindowfocus)")"
+foxwin="$(xdotool search --onlyvisible --class "firefox")"
+
+function grab_firefox_url () {
+    if [ -z "$foxwin" ] ; then
+        return
+    fi
+    if [ "$curwin" != "$foxwin" ] ; then
+        return
+    fi
+    xdotool key --window "$foxwin" --delay 20 --clearmodifiers ctrl+l ctrl+c Escape    
+    xclip -o -selection clipboard
+}
+
+while (( "$#" )); do
+    case "$1" in
+        -f|--firefox)
+            ffurl="$(grab_firefox_url)"
+            shift
+            ;;
+        -m|--magnify)
+            geom="$(slop -r crosshair)"
+            if [ "$?" -ne 0 ] || [ -z "$geom" ] ; then
+                exit 1
+            fi
+            ssargs=( --geometry "$geom" )
+            shift
+            ;;
+        -s|--select)
+            ssargs=( --select )
+            shift
+            ;;
+        -u|--upload)
+            #incmd="imgur -w"
+            # incmd="0x0 -w"  # 0x0.at
+            incmdp=0x0
+            # incmd="$HOME/scripts/0x0 -w"
+            toclip="url"
+            shift
+            ;;
+        -e|--extension)
+            ext="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+    esac
+done
+
+# rm sssleep 1
+title="$(xdotool getwindowfocus getwindowname)"
+
+
+tmpnam="${tmpdir}/${dstring}.${ext}"
+"${sscmd[@]}" "${ssargs[@]}" "$tmpnam" || die "Screenshot acquisition failed"
+
+# shellcheck disable=SC2016
+width="$(exiftool -p '$ImageWidth' "$tmpnam")"
+# shellcheck disable=SC2016
+height="$(exiftool -p '$ImageHeight' "$tmpnam")"
+finame="${ssdir}/${dstring}-${width}x${height}.${ext}"
+mv "$tmpnam" "$finame"
+
+echo "screenshot: window title: \"$title\""
+#echo "screenshot: $tmpnam -> $finame"
+
+if [ "$toclip" == "url" ] ; then
+    # rephile directly echos URL and opens in browser
+    "$rephile" "$incmd" "$finame" || die "Rephiling failed"
+    url="$("$HOME/scripts/0x0" "$finame")"
+    web-browser "$url"
+    notify-send "Screenshot saved and loaded in browser" "$title\n$url\n$finame"
+    echo "screenshot to $url"
+    echo "$url" | xclip
+else
+    comment="$title"
+    if [ -n "$ffurl" ] ; then
+        comment="$title -- $ffurl"
+    fi
+    exiftool -comment="$comment" "$finame" > /dev/null 2>&1
+    # rephile echos the digest hash
+    dst="$("$rephile" "$incmd" "$finame")"  || die "Rephiling to digest failed. (got $dst)"
+    notify-send "Screenshot saved" "$title\n$finame"
+    echo "screenshot to $finame"
+    echo "$finame" | xclip
+fi
+
+if [ -f "${finame}_original" ] ; then
+    rm -f "${finame}_original"
+fi
+
