@@ -1,0 +1,47 @@
+#!/bin/bash
+
+echo "in $0 PATH=$PATH"
+
+mydir="$(dirname $BASH_SOURCE)"
+screenshot=$mydir/screenshot
+
+options=""
+options="${options}select+upload png\0icon\x1fselect\n"
+options="${options}select+upload jpg\0icon\x1fselect\n"
+options="${options}screen+upload png\0icon\x1ffullscreen\n"
+options="${options}screen+upload jpg\0icon\x1ffullscreen\n"
+options="${options}select png\0icon\x1fselect\n"
+options="${options}select jpg\0icon\x1fselect\n"
+options="${options}screen png\0icon\x1ffullscreen\n"
+options="${options}screen jpg\0icon\x1ffullscreen\n"
+
+#set -x
+chosen="$(echo -e "$options" | rofi -dmenu -columns 2 -width -50 -lines 4 -p screenshot -selected-row 1)"
+#echo "got: |$chosen|"
+
+case $chosen in
+    "screen png")
+        $screenshot -f  -e png
+        ;;
+    "screen jpg")
+        $screenshot -f  -e jpg
+        ;;
+    "select png")
+        $screenshot -f -m  -e png
+        ;;
+    "select jpg")
+        $screenshot -f -m  -e jpg
+        ;;
+    "screen+upload png")
+        $screenshot -f --upload -e png
+        ;;
+    "screen+upload jpg")
+        $screenshot -f --upload -e jpg
+        ;;
+    "select+upload png")
+        $screenshot -f -m --upload -e png
+        ;;
+    "select+upload jpg")
+        $screenshot -f -m --upload -e jpg
+        ;;
+esac

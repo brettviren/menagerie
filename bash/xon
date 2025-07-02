@@ -1,12 +1,27 @@
 #!/bin/bash
+
+# sometimes run via ssh to control remote screen.  Make sure we don't
+# accidentally control local screen.
 export DISPLAY=:0.0
+
 xset dpms force on
 sleep 1
 
-delay=7200
+if [ "$1" = "long" ] ; then
+   delay=7200
+else
+   delay=1200
+fi
 
 xset dpms $delay $delay $delay
 xset s $delay $delay
-pulseaudio -k
-sleep 1
-pulseaudio -D
+
+# On some systems (hal), pulse audio needs to restart after waking up the
+# display.  Go figure....
+ppid="$(pgrep pulseaudio)"
+if [ -n "$ppid" ] ; then
+    pulseaudio -k
+    sleep 1
+    pulseaudio -D
+fi
+

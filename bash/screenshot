@@ -128,7 +128,7 @@ echo "screenshot: window title: \"$title\""
 if [ "$toclip" == "url" ] ; then
     # rephile directly echos URL and opens in browser
     "$rephile" "$incmd" "$finame" || die "Rephiling failed"
-    url="$("$HOME/scripts/0x0" "$finame")"
+    url="$($HOME/.local/bin/0x0 "$finame")"
     web-browser "$url"
     notify-send "Screenshot saved and loaded in browser" "$title\n$url\n$finame"
     echo "screenshot to $url"
