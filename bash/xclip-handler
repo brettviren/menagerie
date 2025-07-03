@@ -6,7 +6,8 @@ mydir="$(dirname "$BASH_SOURCE")"
 
 menu_lines () {
     cat <<EOF
-translate
+google
+myougiden
 type
 EOF
 }
@@ -16,6 +17,9 @@ typeit () {
 }
 translateit () {
     "$mydir/translate" xclip primary
+}
+myougidenit () {
+    myougiden-zenity "$(xclip -selection primary -o)"
 }
 
 got=$(menu_lines | rofi -dmenu)

@@ -1,0 +1,5 @@
+#!/bin/bash
+tmpdir="$(mktemp --tmpdir -d translate-XXXXXX)"
+myougiden --color no --human "$@" > $tmpdir/t.ans
+zenity  --text-info  --filename $tmpdir/t.ans --auto-scroll --width=400 --height=600
+

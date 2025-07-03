@@ -137,6 +137,7 @@ doit () {
     fi       
 }
 
+
 if [ -n "$use_xclip" ] ; then
     doit "$(xclip -selection $use_xclip -o)"
 else

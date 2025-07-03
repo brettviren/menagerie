@@ -1,6 +1,6 @@
 [project]
 name = "menagerie"
-version = "0.1.2"
+version = "0.1.3"
 description = "My script menagerie"
 readme = {file = "README.org", content-type = "text/org"}
 authors = [
