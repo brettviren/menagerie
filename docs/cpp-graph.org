@@ -1,0 +1,90 @@
+#+title cpp-graph
+
+The ~cpp-graph~ script produces graphs from Clang's full abstract syntax tree.
+
+* Quick start
+
+#+begin_example
+$ cpp-graph --help
+Usage: cpp-graph [OPTIONS] COMMAND [ARGS]...
+
+  C++ Dependency Graph Generator
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  ast    Compile C++ source to AST and save as graph
+  flow   Compile C++ source to AST, apply rules, make a graph.
+  multi  Compile C++ source to AST, apply rules, make multiple graphs.
+#+end_example
+
+If you have ~uv~ installed, no installation is required.
+
+Example source and configuration files are found in;
+
+#+begin_example
+test/cpp-graph-*
+#+end_example
+
+They may be exercised with:
+
+#+begin_example
+./test/test-cpp-graph
+#+end_example
+
+* Graphs
+
+The graphs are internally represented as ~networkx~ objects.  Currently, you can
+output graph to GraphViz "dot" syntax or anything the ~dot~ command can convert to
+(png, pdf, json, etc).
+
+* AST
+
+The ~cpp-graph ast~ sub command will dump the full Clang AST as a graph.  While simplest to produce, this graph will get big fast as your source increases.  It is useful to examine the AST as one applies rules or developers new rule algorithms.
+
+* Flow and rules
+
+Simpler graphs, requiring more processing complexity, are produced with ~cpp-graph flow~.  This requires a configuration file in TOML syntax to specify a number of "rules".
+
+Rules are defined as configuration sections in the TOML configuration and are applied in order written.
+
+An excerpt from the test example:
+
+#+begin_src toml
+[rule."keep class"]
+spelling = "MyClass"
+kind = "CLASS_DECL"
+algorithm = "descendant"
+mark = "+"
+
+[rule."final purge"]
+algorithm = "purge"
+mark = "-"
+#+end_src
+
+For "flow", the section names must start with ~rule.~ but the quoted string is part is arbitrary.
+
+The named ~algorithm~ maps to a ~rule_<algorithm>()~ function defined in ~cpp-graph~ Python code.  It is called to apply a ~mark~ to graph vertices.  A ="+"= or ="-"= mark conventionally indicates to keep the vertex or not.  The "purge" algorithm will enact that based on the targeted mark.
+Other parameters are algorithm dependent and passed to the ~rule_<algorithm>()~ function.
+
+Commonly a ~spelling~ will name an AST vertex (Clang uses "spelling" to mean "name").  Also a ~kind~ will name the type of AST vertex using Clang's enumerated "kinds".
+
+* Multi graphs
+
+Each call to flow will compile your code, make the AST and then apply rules.  The first two steps take time and it is helpful to generate multiple graphs without having to recompile and remake the AST.  The ~cpp-graph multi~ command allows for that.
+
+It extends the "flow" configuration schema to add sections like:
+
+#+begin_src toml
+[graph."MyClass"]
+  rules = ["keep MyClass", "kill classes", "purge"]
+  out_file = "cpp-graph-test-MyClass.pdf"
+#+end_src
+
+Each ~graph~ section associates a set of rules with an output file.  Rules are written the same as with "flow" configuration but now the names in strings are used to refer to in the ~graph~ attribute ~rules~.  The name of a =[graph."name"]= may be arbitrary.
+
+* Other configuration items
+
+A ~[compile]~ section can have a list attribute ~cpp_files~ to giving C++ source files to compile.  These may also be given on the command line.  A ~[compile]~ section can also list include directories to search for headers with an ~includes~ list.  Include directories can also be given with usual ~-I~ command line flags.
+

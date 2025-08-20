@@ -1,0 +1,51 @@
+[compile]
+cpp_files = [
+          "cpp-graph-test.cpp",
+          ]
+
+[graph."MyClass"]
+  rules = ["keep MyClass", "kill classes", "purge"]
+  out_file = "cpp-graph-test-MyClass.pdf"
+[graph."YourClass"]
+  rules = ["keep YourClass", "kill classes", "kill namespaces", "purge"]
+  out_file = "cpp-graph-test-YourClass.pdf"  
+[graph."myclass intra"]
+  rules = ["keep MyClass intra", "purge"]
+  out_file = "cpp-graph-test-myclass-intra.pdf"  
+
+
+[rule."keep MyClass"]
+spelling = "MyClass"
+kind = "CLASS_DECL"
+algorithm = "descendant"
+mark = "+"
+
+[rule."keep MyClass intra"]
+spellings = "MyClass"
+algorithm = "intraclass"
+depth = 3
+#include_class = true
+mark = "+"
+
+[rule."keep YourClass"]
+spelling = "YourClass"
+kind = "CLASS_DECL"
+algorithm = "descendant"
+mark = "+"
+
+[rule."kill classes"]
+kind = "CLASS_DECL"
+algorithm = "vertex"
+mark = "-"
+
+[rule."kill namespaces"]
+kind = "CLASS_DECL"
+algorithm = "ancestor"
+mark = "-"
+
+[rule."trim"]
+algorithm = "purge"
+mark = "+"
+[rule."purge"]
+algorithm = "purge"
+mark = "-"

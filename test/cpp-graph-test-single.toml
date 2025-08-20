@@ -1,0 +1,25 @@
+
+[compile]
+cpp_files = [
+          "cpp-graph-test.cpp",
+          ]
+
+[rule."keep class"]
+spelling = "MyClass"
+kind = "CLASS_DECL"
+algorithm = "descendant"
+mark = "+"
+
+[rule."purge others"]
+algorithm = "purge"
+mark = "-"
+
+[rule."kill class and above"]
+spelling = "MyClass"
+kind = "CLASS_DECL"
+algorithm = "ancestor"
+mark = "-"
+
+[rule."final purge"]
+algorithm = "purge"
+mark = "-"

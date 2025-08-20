@@ -4,3 +4,6 @@ __pycache__
 unsorted
 build
 *.egg-info
+*.dot
+*.png
+*.pdf
