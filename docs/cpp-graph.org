@@ -37,6 +37,12 @@ output graph to GraphViz "dot" syntax or anything the ~dot~ command can convert 
 
 The ~cpp-graph ast~ sub command will dump the full Clang AST as a graph.  While simplest to produce, this graph will get big fast as your source increases.  It is useful to examine the AST as one applies rules as described next.  Examining the AST is also critical to developing new rule algorithms.
 
+#+begin_example
+$ cpp-graph ast -o ast.svg cpp-graph-test.cpp
+#+end_example
+
+[[file:ast.svg]]
+
 * Flow and rules
 
 The ~cpp-graph flow~ command applies rules to reduce the full AST.  A rule is defined as a configuration section in the TOML configuration.  For "flow", rules are applied in the order written.
@@ -65,6 +71,10 @@ Other parameters in a section are algorithm dependent and passed to the ~rule_<a
 
 Commonly a ~spelling~ will be given to name an AST vertex (Clang uses "spelling" to mean "name").  Also a ~kind~ will often be given to name the "type" of an AST vertex using Clang's enumerated "kinds".
 
+#+begin_example
+$ cpp-graph flow -o single.svg -c cpp-graph-test-single.toml
+#+end_example
+
 * Multi graphs
 
 The ~cpp-graph flow~ command must compile your code and make the AST each time you want to apply new rules.  The first two steps take time and it is helpful to generate multiple graphs without having to recompile and remake the AST.  The ~cpp-graph multi~ command allows for that.
@@ -78,6 +88,16 @@ It extends the "flow" configuration schema to add sections like:
 #+end_src
 
 Each ~[graph."name"]~ section associates a set of rules with an output file.  Rules are written the same as with "flow" configuration but now the names in strings are used to refer to in the ~graph~ attribute ~rules~.  The ="name"= part of a =[graph."name"]= may be arbitrary.
+
+#+begin_example
+$ cpp-graph multi -c cpp-graph-test-multi.toml
+#+end_example
+
+[[file:cpp-graph-test-MyClass.svg]]
+
+[[file:cpp-graph-test-YourClass.svg]]
+
+[[file:cpp-graph-test-myclass-intra.svg]]
 
 * Other configuration items
 

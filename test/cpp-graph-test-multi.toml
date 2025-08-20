@@ -5,13 +5,13 @@ cpp_files = [
 
 [graph."MyClass"]
   rules = ["keep MyClass", "kill classes", "purge"]
-  out_file = "cpp-graph-test-MyClass.pdf"
+  out_file = "cpp-graph-test-MyClass.svg"
 [graph."YourClass"]
   rules = ["keep YourClass", "kill classes", "kill namespaces", "purge"]
-  out_file = "cpp-graph-test-YourClass.pdf"  
+  out_file = "cpp-graph-test-YourClass.svg"  
 [graph."myclass intra"]
   rules = ["keep MyClass intra", "purge"]
-  out_file = "cpp-graph-test-myclass-intra.pdf"  
+  out_file = "cpp-graph-test-myclass-intra.svg"  
 
 
 [rule."keep MyClass"]

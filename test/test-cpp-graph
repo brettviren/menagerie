@@ -8,7 +8,7 @@ topdir="$(dirname "$testdir")"
 cd $topdir/test/
 cg=$topdir/python/cpp-graph
 
-$cg ast -o ast.pdf cpp-graph-test.cpp
-$cg flow -o single.png -c cpp-graph-test-single.toml
+$cg ast -o ast.svg cpp-graph-test.cpp
+$cg flow -o single.svg -c cpp-graph-test-single.toml
 $cg multi -c cpp-graph-test-multi.toml
-ls -l cpp-graph-test-*.{dot,pdf}
+ls -l cpp-graph-test-*.{dot,svg}
