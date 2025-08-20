@@ -1,4 +1,4 @@
-#+title cpp-graph
+#+title: cpp-graph
 
 The ~cpp-graph~ script produces graphs from Clang's full abstract syntax tree.
 
@@ -21,13 +21,7 @@ Commands:
 
 If you have ~uv~ installed, no installation is required.
 
-Example source and configuration files are found in;
-
-#+begin_example
-test/cpp-graph-*
-#+end_example
-
-They may be exercised with:
+A quick test of all these commands can be run with:
 
 #+begin_example
 ./test/test-cpp-graph
@@ -41,15 +35,13 @@ output graph to GraphViz "dot" syntax or anything the ~dot~ command can convert 
 
 * AST
 
-The ~cpp-graph ast~ sub command will dump the full Clang AST as a graph.  While simplest to produce, this graph will get big fast as your source increases.  It is useful to examine the AST as one applies rules or developers new rule algorithms.
+The ~cpp-graph ast~ sub command will dump the full Clang AST as a graph.  While simplest to produce, this graph will get big fast as your source increases.  It is useful to examine the AST as one applies rules as described next.  Examining the AST is also critical to developing new rule algorithms.
 
 * Flow and rules
 
-Simpler graphs, requiring more processing complexity, are produced with ~cpp-graph flow~.  This requires a configuration file in TOML syntax to specify a number of "rules".
+The ~cpp-graph flow~ command applies rules to reduce the full AST.  A rule is defined as a configuration section in the TOML configuration.  For "flow", rules are applied in the order written.
 
-Rules are defined as configuration sections in the TOML configuration and are applied in order written.
-
-An excerpt from the test example:
+Here is an excerpt from the "simple" test example:
 
 #+begin_src toml
 [rule."keep class"]
@@ -63,16 +55,19 @@ algorithm = "purge"
 mark = "-"
 #+end_src
 
-For "flow", the section names must start with ~rule.~ but the quoted string is part is arbitrary.
+This would mark a single vertex in the AST and purge all the others leaving a one-vertex graph.  See the actual test for a more nuanced selection.
 
-The named ~algorithm~ maps to a ~rule_<algorithm>()~ function defined in ~cpp-graph~ Python code.  It is called to apply a ~mark~ to graph vertices.  A ="+"= or ="-"= mark conventionally indicates to keep the vertex or not.  The "purge" algorithm will enact that based on the targeted mark.
-Other parameters are algorithm dependent and passed to the ~rule_<algorithm>()~ function.
+For ~cpp-graph flow~ configuration, the section names must start with ~rule.~ but the quoted string is part is arbitrary.
 
-Commonly a ~spelling~ will name an AST vertex (Clang uses "spelling" to mean "name").  Also a ~kind~ will name the type of AST vertex using Clang's enumerated "kinds".
+The ~algorithm~ attribute value maps to a ~rule_<algname>()~ function defined in ~cpp-graph~ Python code.  It is called to apply a ~mark~ to graph vertices.  A ="+"= or ="-"= mark conventionally indicates to keep the vertex or not.  The "purge" algorithm will actually enact that based on the targeted mark.  Marks can also be used in other algorithms and it is common to define rules that are a mix of selected marking, unmarking, purging, clearing, etc.
+
+Other parameters in a section are algorithm dependent and passed to the ~rule_<algname>()~ function.
+
+Commonly a ~spelling~ will be given to name an AST vertex (Clang uses "spelling" to mean "name").  Also a ~kind~ will often be given to name the "type" of an AST vertex using Clang's enumerated "kinds".
 
 * Multi graphs
 
-Each call to flow will compile your code, make the AST and then apply rules.  The first two steps take time and it is helpful to generate multiple graphs without having to recompile and remake the AST.  The ~cpp-graph multi~ command allows for that.
+The ~cpp-graph flow~ command must compile your code and make the AST each time you want to apply new rules.  The first two steps take time and it is helpful to generate multiple graphs without having to recompile and remake the AST.  The ~cpp-graph multi~ command allows for that.
 
 It extends the "flow" configuration schema to add sections like:
 
@@ -82,7 +77,7 @@ It extends the "flow" configuration schema to add sections like:
   out_file = "cpp-graph-test-MyClass.pdf"
 #+end_src
 
-Each ~graph~ section associates a set of rules with an output file.  Rules are written the same as with "flow" configuration but now the names in strings are used to refer to in the ~graph~ attribute ~rules~.  The name of a =[graph."name"]= may be arbitrary.
+Each ~[graph."name"]~ section associates a set of rules with an output file.  Rules are written the same as with "flow" configuration but now the names in strings are used to refer to in the ~graph~ attribute ~rules~.  The ="name"= part of a =[graph."name"]= may be arbitrary.
 
 * Other configuration items
 
